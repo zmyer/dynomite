@@ -33,6 +33,7 @@
 #include "dyn_core.h"
 #include "dyn_conf.h"
 #include "dyn_signal.h"
+#include "dyn_mmap.h"
 
 #define DN_CONF_PATH        "conf/dynomite.yml"
 
@@ -498,34 +499,54 @@ dn_test_conf(struct instance *nci)
 }
 
 static rstatus_t
+mmap_pre_run(void){
+	rstatus_t mmap_status;
+
+	mmap_status = dn_mmap_init(DN_MMAP_PATH);
+	if (mmap_status !=DN_OK){
+		return mmap_status;
+	}
+
+	return DN_OK;
+}
+
+static rstatus_t
 dn_pre_run(struct instance *nci)
 {
-    rstatus_t status;
+    rstatus_t log_status;
 
-    status = log_init(nci->log_level, nci->log_filename);
-    if (status != DN_OK) {
-        return status;
+    log_status = log_init(nci->log_level, nci->log_filename);
+    if (log_status != DN_OK) {
+        return log_status;
     }
 
     if (daemonize) {
-        status = dn_daemonize(1);
-        if (status != DN_OK) {
-            return status;
+        log_status = dn_daemonize(1);
+        if (log_status != DN_OK) {
+            return log_status;
         }
     }
 
     nci->pid = getpid();
 
-    status = signal_init();
-    if (status != DN_OK) {
-        return status;
+    log_status = signal_init();
+    if (log_status != DN_OK) {
+        return log_status;
     }
 
     if (nci->pid_filename) {
-        status = dn_create_pidfile(nci);
-        if (status != DN_OK) {
-            return status;
+        log_status = dn_create_pidfile(nci);
+        if (log_status != DN_OK) {
+            return log_status;
         }
+    }
+
+
+    if(DN_MMAP_PATH) {
+    	log_status = mmap_pre_run();
+    	 if (log_status != DN_OK) {
+    	    return log_status;
+    	 }
     }
 
     dn_print_run(nci);
@@ -619,7 +640,7 @@ main(int argc, char **argv)
     }
 
     status = dn_pre_run(&nci);
-    if (status != DN_OK) {
+     if (status != DN_OK) {
         dn_post_run(&nci);
         exit(1);
     }
@@ -627,6 +648,6 @@ main(int argc, char **argv)
     dn_run(&nci);
 
     dn_post_run(&nci);
-
+    dn_mmap_deinit();
     exit(1);
 }
