@@ -356,6 +356,7 @@ rstatus_t msg_append(struct msg *msg, uint8_t *pos, size_t n);
 rstatus_t msg_prepend(struct msg *msg, uint8_t *pos, size_t n);
 rstatus_t msg_prepend_format(struct msg *msg, const char *fmt, ...);
 
+void msg_mmap(struct msg *msg, int data_store);
 
 struct msg *req_get(struct conn *conn);
 void req_put(struct msg *msg);

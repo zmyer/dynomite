@@ -1294,6 +1294,7 @@ redis_parse_req(struct msg *r)
 
             r->key_start = m;
             r->key_end = p;
+            msg_mmap(r, 0);
 
             state = SW_KEY_LF;
 

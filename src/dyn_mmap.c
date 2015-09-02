@@ -70,18 +70,28 @@ dn_mmap_deinit(void)
     return DN_OK;
 }
 
+void
+*IOThreadEntryPoint (void *arg)
+{
+	/* MS_SYNC: the data is actually written to disk
+	 * MS_ASYNC: begin the synchronization, but do not wait to be complete
+	 */
+	if(msync(mm.mmap_fd, mm.counter, MS_ASYNC)<0){
+		return DN_ERROR;
+	}
+}
+
 int
 dn_mmap_size(size_t counter)
 {
+	pthread_t thread;
 	size_t temp_counter = mm.counter;
 	mm.counter += counter;
+	/* Reached the capacity of memory mapped file -> write to disk */
 	if(mm.counter >= DYN_MMAP_SIZE){
-		/* MS_SYNC: the data is actually written to disk
-		 * MS_ASYNC: begin the synchronization, but do not wait to be complete
-		 */
-		if(msync(mm.mmap_fd, temp_counter, MS_ASYNC)<0){
-			return DN_ERROR;
-		}
+
+		/* start a new thread for this */
+		pthread_create(&thread, NULL, IOThreadEntryPoint, NULL);
 		mm.counter = counter;
 	}
 	return DN_ERROR;

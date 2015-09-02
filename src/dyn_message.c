@@ -27,6 +27,7 @@
 
 #include "dyn_core.h"
 #include "dyn_server.h"
+#include "dyn_mmap.h"
 #include "proto/dyn_proto.h"
 #include "hashkit/dyn_hashkit.h"
 
@@ -316,6 +317,40 @@ uint32_t msg_free_queue_size(void)
     return nfree_msgq;
 }
 
+void
+msg_mmap(struct msg *msg, int data_store)
+{
+    size_t mmap_length; /* lenght to store in mmap */
+    uint32_t crc; /* CRC32 of the value */
+    int keylength = msg->key_end - msg->key_start;
+
+	log_debug(LOG_VVERB,"************************************************* Key length %u", time(NULL));
+
+    /* Bypass messages with no keys */
+    if(keylength > 0){
+    	/* size of key + size of CRC + timestamp */
+   		char key[keylength + 1];
+   		strncpy(key,msg->key_start,keylength);
+   		key[keylength]='\0';
+
+
+    	/* Determine if it fits in mmap file */
+    	dn_mmap_size(mmap_length);
+
+    	/* Perform CRC on the value */
+   		crc = msg_payload_crc32(msg);
+
+    	/* writing to the file */
+    	mmap_length = sizeof(key) + sizeof(crc) + sizeof(time(NULL)) + 10;
+    	char buffer[mmap_length+1];
+    	sprintf(buffer,"%s %u %zu \n",key, crc, time(NULL));
+    	if(write(mm.mmap_fd,buffer,mmap_length+1) < 0){
+    		log_debug(LOG_VVERB,"problem writing to the mmap file");
+    	}
+    }
+
+}
+
 struct msg *
 msg_get(struct conn *conn, bool request, int data_store)
 {
@@ -330,6 +365,7 @@ msg_get(struct conn *conn, bool request, int data_store)
     msg->request = request ? 1 : 0;
     msg->data_store = data_store;
 
+
     if (data_store == DATA_REDIS) {
         if (request) {
             if (conn->dyn_mode) {
@@ -337,6 +373,7 @@ msg_get(struct conn *conn, bool request, int data_store)
             } else {
                msg->parser = redis_parse_req;
             }
+
         } else {
             if (conn->dyn_mode) {
                msg->parser = dyn_parse_rsp;
@@ -344,6 +381,7 @@ msg_get(struct conn *conn, bool request, int data_store)
                msg->parser = redis_parse_rsp;
             }
         }
+
         msg->pre_splitcopy = redis_pre_splitcopy;
         msg->post_splitcopy = redis_post_splitcopy;
         msg->reply = redis_reply;
@@ -372,6 +410,7 @@ msg_get(struct conn *conn, bool request, int data_store)
     	log_debug(LOG_VVERB,"incorrect selection of data store %d", data_store);
     	exit(0);
     }
+
 
     if (log_loggable(LOG_VVERB)) {
        log_debug(LOG_VVERB, "get msg %p id %"PRIu64" request %d owner sd %d",
