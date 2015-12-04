@@ -33,6 +33,11 @@
 
 
 static uint32_t ctx_id; /* context generation */
+static uint64_t read_times[CONN_UNSPECIFIED] = {0};
+static uint64_t write_times[CONN_UNSPECIFIED] = {0};
+static uint32_t num_conn_reads = 0;
+static uint32_t num_conn_writes = 0;
+static int64_t next_log = 0;
 
 static struct context *
 core_ctx_create(struct instance *nci)
@@ -195,6 +200,7 @@ core_ctx_create(struct instance *nci)
 
 	log_debug(LOG_VVERB, "created ctx %p id %"PRIu32"", ctx, ctx->id);
 
+    next_log = dn_msec_now() + 10000;
 	return ctx;
 }
 
@@ -249,13 +255,15 @@ static rstatus_t
 core_recv(struct context *ctx, struct conn *conn)
 {
 	rstatus_t status;
-
+    int64_t start = dn_usec_now();
 	status = conn_recv(ctx, conn);
 	if (status != DN_OK) {
 		log_info("recv on %s %d failed: %s", conn_get_type_string(conn),
 				 conn->sd, strerror(errno));
 	}
-
+    int64_t end = dn_usec_now();
+    read_times[conn->type] += (end - start);
+    num_conn_reads++;
 	return status;
 }
 
@@ -264,13 +272,34 @@ core_send(struct context *ctx, struct conn *conn)
 {
 	rstatus_t status;
 
+    int64_t start = dn_usec_now();
 	status = conn_send(ctx, conn);
 	if (status != DN_OK) {
 		log_info("send on %s %d failed: %s", conn_get_type_string(conn),
 				 conn->sd, strerror(errno));
 	}
 
+    int64_t end = dn_usec_now();
+    write_times[conn->type] += (end - start);
+    num_conn_writes++;
 	return status;
+}
+
+static void
+core_dump_conn_stats()
+{
+    if (next_log > dn_msec_now())
+        return;
+    int i;
+    for (i = 0; i < CONN_UNSPECIFIED; i++) {
+        log_warn("%s: Average read time spent %.2f %lu %u", CONN_TYPES[i],
+                 num_conn_reads ? ((double)read_times[i])/num_conn_reads : 0,
+                 read_times[i], num_conn_reads);
+        log_warn("%s: Average write time spent %.2f %lu %u", CONN_TYPES[i],
+                 num_conn_writes ? ((double)write_times[i])/num_conn_writes : 0,
+                 write_times[i], num_conn_writes);
+    }
+    next_log = dn_msec_now() + 10000;
 }
 
 static void
@@ -396,6 +425,7 @@ core_core(void *arg, uint32_t events)
     log_debug(LOG_VVERB, "event %04"PRIX32" on %s %d", events,
               conn_get_type_string(conn), conn->sd);
 
+    core_dump_conn_stats();
 	conn->events = events;
 
 	/* error takes precedence over read | write */

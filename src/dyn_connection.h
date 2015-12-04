@@ -81,13 +81,13 @@ struct conn_ops {
 };
 
 typedef enum connection_type {
-    CONN_UNSPECIFIED,
     CONN_PROXY, // a dynomite proxy (listening) connection 
     CONN_CLIENT, // this is connected to a client connection
     CONN_SERVER, // this is connected to underlying datastore ...redis/memcache
     CONN_DNODE_PEER_PROXY, // this is a dnode (listening) connection...default 8101
     CONN_DNODE_PEER_CLIENT, // this is connected to a dnode peer client
     CONN_DNODE_PEER_SERVER, // this is connected to a dnode peer server
+    CONN_UNSPECIFIED,
 } connection_type_t;
 
 struct conn {
@@ -143,19 +143,15 @@ struct conn {
     connection_type_t  type;
 };
 
-static inline char *
+static const char *CONN_TYPES[CONN_UNSPECIFIED+1] = { "PROXY", "CLIENT", "SERVER",
+                                          "PEER_PROXY", "PEER_CLIENT",
+                                          "PEER_SERVER", "UNSPEC" };
+static inline const char *
 conn_get_type_string(struct conn *conn)
 {
-    switch(conn->type) {
-        case CONN_UNSPECIFIED: return "UNSPEC";
-        case CONN_PROXY : return "PROXY";
-        case CONN_CLIENT: return "CLIENT";
-        case CONN_SERVER: return "SERVER";
-        case CONN_DNODE_PEER_PROXY: return "PEER_PROXY";
-        case CONN_DNODE_PEER_CLIENT: return "PEER_CLIENT";
-        case CONN_DNODE_PEER_SERVER: return "PEER_SERVER";
-    }
-    return "INVALID";
+    if (conn->type > CONN_UNSPECIFIED)
+        return CONN_TYPES[CONN_UNSPECIFIED];
+    return CONN_TYPES[conn->type];
 }
 
 
