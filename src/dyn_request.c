@@ -28,6 +28,19 @@ static rstatus_t msg_quorum_rsp_handler(struct msg *req, struct msg *rsp);
 static rstatus_t msg_local_one_rsp_handler(struct msg *req, struct msg *rsp);
 static msg_response_handler_t msg_get_rsp_handler(struct msg *req);
 
+void avg_accumulate_add(struct avg_accumulate* avg, uint64_t val)
+{
+    avg->val += val;
+    avg->count ++;
+}
+
+struct avg_accumulate server_inq = { "SERVER_INQ", 0, 0 };
+struct avg_accumulate server_outq = { "SERVER_OUTQ", 0, 0 };
+struct avg_accumulate client_outq = { "CLIENT_OUTQ", 0, 0 };
+struct avg_accumulate server_inq;
+struct avg_accumulate server_outq;
+struct avg_accumulate client_outq;
+
 struct msg *
 req_get(struct conn *conn)
 {
@@ -290,6 +303,8 @@ req_server_dequeue_imsgq(struct context *ctx, struct conn *conn, struct msg *msg
     ASSERT(msg->request);
     ASSERT(conn->type == CONN_SERVER);
     msg->dequeue_server_inq_time = dn_usec_now();
+    avg_accumulate_add(&server_inq, msg->dequeue_server_inq_time -
+                                    msg->enqueue_server_inq_time);
 
     TAILQ_REMOVE(&conn->imsg_q, msg, s_tqe);
     log_debug(LOG_VERB, "conn %p dequeue inq %d:%d", conn, msg->id, msg->parent_id);
@@ -329,6 +344,8 @@ req_client_dequeue_omsgq(struct context *ctx, struct conn *conn, struct msg *msg
     ASSERT(msg->request);
     ASSERT(conn->type == CONN_CLIENT);
     msg->dequeue_client_outq_time = dn_usec_now();
+    avg_accumulate_add(&client_outq, msg->dequeue_client_outq_time -
+                                     msg->enqueue_client_outq_time);
 
     if (msg->stime_in_microsec) {
         uint64_t latency = dn_usec_now() - msg->stime_in_microsec;
@@ -344,6 +361,8 @@ req_server_dequeue_omsgq(struct context *ctx, struct conn *conn, struct msg *msg
     ASSERT(msg->request);
     ASSERT(conn->type == CONN_SERVER);
     msg->dequeue_server_outq_time = dn_usec_now();
+    avg_accumulate_add(&server_outq, msg->dequeue_server_outq_time -
+                                     msg->enqueue_server_outq_time);
 
     msg_tmo_delete(msg);
 

@@ -430,4 +430,10 @@ void dnode_peer_gossip_forward(struct context *ctx, struct conn *conn, int data_
 rstatus_t client_handle_response(struct conn *conn, msgid_t msg, struct msg *rsp);
 rstatus_t dnode_client_handle_response(struct conn *conn, msgid_t msg, struct msg *rsp);
 
+struct avg_accumulate {
+    char *name;
+    uint64_t val;
+    uint32_t count;
+};
+void avg_accumulate_add(struct avg_accumulate* avg, uint64_t val);
 #endif

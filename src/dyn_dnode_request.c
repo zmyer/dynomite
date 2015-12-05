@@ -12,6 +12,9 @@
 //static struct string client_request_dyn_msg = string("Client_request");
 static uint64_t peer_msg_id = 0;
 
+struct avg_accumulate peer_server_inq = { "PEER_SERVER_INQ", 0, 0 };
+struct avg_accumulate peer_server_outq = { "PEER_SERVER_OUTQ", 0, 0 };
+struct avg_accumulate peer_client_outq = { "PEER_CLIENT_OUTQ", 0, 0 };
 void
 dnode_req_peer_enqueue_imsgq(struct context *ctx, struct conn *conn, struct msg *msg)
 {
@@ -30,6 +33,8 @@ dnode_req_peer_dequeue_imsgq(struct context *ctx, struct conn *conn, struct msg 
     ASSERT(msg->request);
     ASSERT(conn->type == CONN_DNODE_PEER_SERVER);
     msg->dequeue_peer_server_inq_time = dn_usec_now();
+    avg_accumulate_add(&peer_server_inq, msg->dequeue_peer_server_inq_time -
+                                         msg->enqueue_server_inq_time);
 
     TAILQ_REMOVE(&conn->imsg_q, msg, s_tqe);
     log_debug(LOG_VERB, "conn %p dequeue inq %d:%d", conn, msg->id, msg->parent_id);
@@ -83,6 +88,8 @@ dnode_req_client_dequeue_omsgq(struct context *ctx, struct conn *conn, struct ms
     ASSERT(msg->request);
     ASSERT(conn->type == CONN_DNODE_PEER_CLIENT);
     msg->dequeue_peer_client_outq_time = dn_usec_now();
+    avg_accumulate_add(&peer_client_outq, msg->dequeue_peer_client_outq_time -
+                                          msg->enqueue_peer_client_outq_time);
 
     TAILQ_REMOVE(&conn->omsg_q, msg, c_tqe);
     log_debug(LOG_VERB, "conn %p dequeue outq %p", conn, msg);
@@ -99,6 +106,8 @@ dnode_req_peer_dequeue_omsgq(struct context *ctx, struct conn *conn, struct msg 
     ASSERT(msg->request);
     ASSERT(conn->type == CONN_DNODE_PEER_SERVER);
     msg->dequeue_peer_server_outq_time = dn_usec_now();
+    avg_accumulate_add(&peer_server_outq, msg->dequeue_peer_server_outq_time -
+                                          msg->enqueue_peer_server_outq_time);
 
     msg_tmo_delete(msg);
 
