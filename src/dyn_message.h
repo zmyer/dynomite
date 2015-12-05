@@ -310,10 +310,18 @@ struct msg {
     consistency_t        consistency;
     msgid_t              parent_id;       /* parent message id */
     struct response_mgr  rspmgr;
-    int64_t              enqueue_inq_time;  /* start time in microsec */
-    int64_t              dequeue_inq_time;  /* start time in microsec */
-    int64_t              enqueue_outq_time;  /* start time in microsec */
-    int64_t              dequeue_outq_time;  /* start time in microsec */
+    int64_t              enqueue_server_inq_time;  /* start time in microsec */
+    int64_t              dequeue_server_inq_time;  /* start time in microsec */
+    int64_t              enqueue_server_outq_time;  /* start time in microsec */
+    int64_t              dequeue_server_outq_time;  /* start time in microsec */
+    int64_t              enqueue_peer_server_inq_time;  /* start time in microsec */
+    int64_t              dequeue_peer_server_inq_time;  /* start time in microsec */
+    int64_t              enqueue_peer_server_outq_time;  /* start time in microsec */
+    int64_t              dequeue_peer_server_outq_time;  /* start time in microsec */
+    int64_t              enqueue_client_outq_time;  /* start time in microsec */
+    int64_t              dequeue_client_outq_time;  /* start time in microsec */
+    int64_t              enqueue_peer_client_outq_time;  /* start time in microsec */
+    int64_t              dequeue_peer_client_outq_time;  /* start time in microsec */
 };
 
 TAILQ_HEAD(msg_tqh, msg);

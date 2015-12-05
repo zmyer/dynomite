@@ -17,6 +17,7 @@ dnode_req_peer_enqueue_imsgq(struct context *ctx, struct conn *conn, struct msg 
 {
     ASSERT(msg->request);
     ASSERT(conn->type == CONN_DNODE_PEER_SERVER);
+    msg->enqueue_peer_server_inq_time = dn_usec_now();
 
     log_debug(LOG_VERB, "conn %p enqueue inq %d:%d calling req_server_enqueue_imsgq",
               conn, msg->id, msg->parent_id);
@@ -28,6 +29,7 @@ dnode_req_peer_dequeue_imsgq(struct context *ctx, struct conn *conn, struct msg 
 {
     ASSERT(msg->request);
     ASSERT(conn->type == CONN_DNODE_PEER_SERVER);
+    msg->dequeue_peer_server_inq_time = dn_usec_now();
 
     TAILQ_REMOVE(&conn->imsg_q, msg, s_tqe);
     log_debug(LOG_VERB, "conn %p dequeue inq %d:%d", conn, msg->id, msg->parent_id);
@@ -45,6 +47,7 @@ dnode_req_client_enqueue_omsgq(struct context *ctx, struct conn *conn, struct ms
 {
     ASSERT(msg->request);
     ASSERT(conn->type == CONN_DNODE_PEER_CLIENT);
+    msg->enqueue_peer_client_outq_time = dn_usec_now();
 
     log_debug(LOG_VERB, "conn %p enqueue outq %p", conn, msg);
     TAILQ_INSERT_TAIL(&conn->omsg_q, msg, c_tqe);
@@ -60,6 +63,7 @@ dnode_req_peer_enqueue_omsgq(struct context *ctx, struct conn *conn, struct msg 
 {
     ASSERT(msg->request);
     ASSERT(conn->type == CONN_DNODE_PEER_SERVER);
+    msg->enqueue_peer_server_outq_time = dn_usec_now();
 
     TAILQ_INSERT_TAIL(&conn->omsg_q, msg, s_tqe);
     log_debug(LOG_VERB, "conn %p enqueue outq %d:%d", conn, msg->id, msg->parent_id);
@@ -78,6 +82,7 @@ dnode_req_client_dequeue_omsgq(struct context *ctx, struct conn *conn, struct ms
 {
     ASSERT(msg->request);
     ASSERT(conn->type == CONN_DNODE_PEER_CLIENT);
+    msg->dequeue_peer_client_outq_time = dn_usec_now();
 
     TAILQ_REMOVE(&conn->omsg_q, msg, c_tqe);
     log_debug(LOG_VERB, "conn %p dequeue outq %p", conn, msg);
@@ -93,6 +98,7 @@ dnode_req_peer_dequeue_omsgq(struct context *ctx, struct conn *conn, struct msg 
 {
     ASSERT(msg->request);
     ASSERT(conn->type == CONN_DNODE_PEER_SERVER);
+    msg->dequeue_peer_server_outq_time = dn_usec_now();
 
     msg_tmo_delete(msg);
 
