@@ -34,7 +34,7 @@ dnode_req_peer_dequeue_imsgq(struct context *ctx, struct conn *conn, struct msg 
     ASSERT(conn->type == CONN_DNODE_PEER_SERVER);
     msg->dequeue_peer_server_inq_time = dn_usec_now();
     avg_accumulate_add(&peer_server_inq, msg->dequeue_peer_server_inq_time -
-                                         msg->enqueue_server_inq_time);
+                                         msg->enqueue_peer_server_inq_time);
 
     TAILQ_REMOVE(&conn->imsg_q, msg, s_tqe);
     log_debug(LOG_VERB, "conn %p dequeue inq %d:%d", conn, msg->id, msg->parent_id);

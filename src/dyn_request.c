@@ -37,9 +37,26 @@ void avg_accumulate_add(struct avg_accumulate* avg, uint64_t val)
 struct avg_accumulate server_inq = { "SERVER_INQ", 0, 0 };
 struct avg_accumulate server_outq = { "SERVER_OUTQ", 0, 0 };
 struct avg_accumulate client_outq = { "CLIENT_OUTQ", 0, 0 };
-struct avg_accumulate server_inq;
-struct avg_accumulate server_outq;
-struct avg_accumulate client_outq;
+extern struct avg_accumulate peer_server_inq;
+extern struct avg_accumulate peer_server_outq;
+extern struct avg_accumulate peer_client_outq;
+
+void avg_accumulate_print(struct avg_accumulate *avg)
+{
+    log_warn("Average: %s %.2f", avg->name,
+             avg->count ? ((double)avg->val)/avg->count : 0);
+}
+
+void
+dump_queue_stats()
+{
+    avg_accumulate_print(&server_inq);
+    avg_accumulate_print(&server_outq);
+    avg_accumulate_print(&client_outq);
+    avg_accumulate_print(&peer_server_inq);
+    avg_accumulate_print(&peer_server_outq);
+    avg_accumulate_print(&peer_client_outq);
+}
 
 struct msg *
 req_get(struct conn *conn)

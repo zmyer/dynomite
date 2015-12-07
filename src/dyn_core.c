@@ -299,6 +299,7 @@ core_dump_conn_stats()
                  num_conn_writes ? ((double)write_times[i])/num_conn_writes : 0,
                  write_times[i], num_conn_writes);
     }
+    dump_queue_stats();
     next_log = dn_msec_now() + 10000;
 }
 
