@@ -1,7 +1,7 @@
 # Define the package version numbers and the bug reporting address
 m4_define([DN_MAJOR], 0)
 m4_define([DN_MINOR], 5)
-m4_define([DN_PATCH], 6)
+m4_define([DN_PATCH], 7)
 m4_define([DN_BUGS], [dynomite@netflix.com])
 
 # Initialize autoconf
@@ -210,6 +210,7 @@ AC_CONFIG_FILES([Makefile
                  src/Makefile
                  src/hashkit/Makefile
                  src/proto/Makefile
+                 src/entropy/Makefile
                  src/seedsprovider/Makefile
                  src/event/Makefile])
 
