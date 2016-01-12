@@ -86,7 +86,9 @@
 
 #define CONF_DEFAULT_SEED_PROVIDER           "simple_provider"
 
-#define PEM_KEY_FILE  "conf/dynomite.pem"
+#define PEM_KEY_FILE      "conf/dynomite.pem"
+#define RECON_KEY_FILE    "conf/recon_key.pem"
+#define RECON_IV_FILE     "conf/recon_iv.pem"
 
 
 struct conf_listen {
@@ -144,6 +146,8 @@ struct conf_pool {
     struct string      read_consistency;
     struct string      write_consistency;
     struct string      pem_key_file;
+    struct string	   recon_key_file;		  /* file with Key encryption in reconciliation */
+    struct string      recon_iv_file;		  /* file with Initialization Vector encryption in reconciliation */
     struct string      dc;                    /* this node's dc */
     struct string      env;                   /* aws, google, network, ... */
     int                conn_msg_rate;         /* conn msg per sec */
