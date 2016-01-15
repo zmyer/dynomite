@@ -41,12 +41,13 @@ short keyIVLoaded;
 /* Structure for sending AOF to Spark Cluster */
 struct entropy {
     struct context           *ctx;
-    uint16_t                  port;           /* port */
-    struct string             addr;           /* address */
-    int64_t                   entropy_ts;     /* timestamp of dynomite */
-    pthread_t                 tid;            /* aggregator thread */
-    int                       interval;       /* entropy aggregation interval */
-    int                       sd;             /* socket descriptor */
+    uint16_t                  port;           		  /* port */
+    struct string             addr;           		  /* address */
+    int64_t                   entropy_ts;     		  /* timestamp of dynomite */
+    pthread_t                 tid;            		  /* aggregator thread */
+    int                       interval;       		  /* entropy aggregation interval */
+    int                       sd;             		  /* socket descriptor */
+    int 					  redis_sd;				  /* Redis socket descriptor for AOF */
     struct string	          recon_key_file;		  /* file with Key encryption in reconciliation */
     struct string             recon_iv_file;		  /* file with Initialization Vector encryption in reconciliation */
 };

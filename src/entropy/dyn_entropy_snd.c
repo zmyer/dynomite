@@ -141,7 +141,7 @@ entropy_snd_callback(void *arg1, void *arg2)
      	 goto error;
     }
 
-    /* clear buffer before using it */
+    /* Constructing the header: file size & buffer size */
     memset(&buff[0], 0, sizeof(buff));
     buff[0] = (int)((((int)file_stat.st_size) >> 24) & 0xFF);
     buff[1] = (int)((((int)file_stat.st_size) >> 16) & 0xFF);
@@ -153,25 +153,21 @@ entropy_snd_callback(void *arg1, void *arg2)
     buff[6] = (int)((BUFFER_SIZE >> 8) & 0XFF);
     buff[7] = (int)((BUFFER_SIZE & 0XFF));
 
-    /* Encrypt the header  */
-    ciphertext_len = entropy_encrypt (buff, HEADER_SIZE, ciphertext);
-    if(ciphertext_len <0)
-    {
-    	log_error("Error encrypting the AOF file size");
-    	goto error;
-    }
-    loga("Ciphertext Length is %d",ciphertext_len);
-    loga("sizeof ciphertext %d", sizeof(ciphertext));
-//    loga("unencrypted text: %02X:%02X:%02X:%02X:%02X:%02X:%02X:%02X", buff[0], buff[1], buff[2], buff[3],buff[4], buff[5], buff[6], buff[7]);
-//    loga("cyphertext: %02X:%02X:%02X:%02X", ciphertext[0], ciphertext[1], ciphertext[2], ciphertext[3]);
 
-
-    /* transmit the file size in encrypted or unencrypted format */
-    if(ENCRYPT_FLAG == 1)
+    /* Header transmission */
+    if(ENCRYPT_FLAG == 1) {
+        ciphertext_len = entropy_encrypt (buff, HEADER_SIZE, ciphertext);
+        if(ciphertext_len <0)
+        {
+        	log_error("Error encrypting the AOF file size");
+        	goto error;
+        }
+        loga("Ciphertext Length is %d",ciphertext_len);
     	transmit_len = send(peer_socket, ciphertext, sizeof(ciphertext), 0);
-    else
+    }
+    else{
     	transmit_len = send(peer_socket, buff, sizeof(buff), 0);
-
+    }
 
 	if (transmit_len < 0)
 	{
