@@ -34,6 +34,35 @@
 
 #include "dyn_core.h"
 
+/*
+ * Function:  redisConnector
+ * --------------------
+ *
+ *  returns: rstatus_t for the status of opening of the redis connection.
+ */
+
+static int
+redisConnector(){
+    /* opening the socket to local Redis */
+    struct hostent *server;
+
+    struct sockaddr_in serv_addr;
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0){
+    	log_error("open socket to Redis failed");
+    	return -1;
+    }
+    bzero((char *) &serv_addr, sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); /* set destination IP number - localhost, 127.0.0.1*/
+    serv_addr.sin_port = htons(22122);
+    if (connect(sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0)
+
+    loga("redis-server connection established");
+    return sockfd;
+
+}
+
 
 /*
  * Function:  entropy_rcv_callback
@@ -45,16 +74,10 @@
 static void
 entropy_rcv_callback(void *arg1, void *arg2)
 {
-    ssize_t         received_len;
-    int 			peer_socket;
-    char 			command[BUFFER_SIZE];				//TODO: create dynamic strings.
-    char			redisKey[BUFFER_SIZE];
-    char			newValue[BUFFER_SIZE];
-    char			oldValue[BUFFER_SIZE];
-
-    int32_t 		keyLength;
-    int32_t 		newValueLength;
-    int32_t 		oldValueLength;
+    ssize_t         received_len, written_len;
+    int 			peer_socket,redis_socket;
+    char 			aof[BUFFER_SIZE];
+    int32_t 		aofLength;
     int32_t			tempInt;
     int 			sys_ret = 0;
     int 			i = 0;
@@ -102,92 +125,52 @@ entropy_rcv_callback(void *arg1, void *arg2)
     }
     loga("Expected number of keys: %d", numberOfKeys);
 
+    /* Connect to redis-server */
+    redis_socket = redisConnector();
+    if(redis_socket == -1){
+    	goto error;
+    }
+
+
     /* Iterating around the keys */
     for(i=0; i<numberOfKeys; i++){
-        memset(&redisKey[0], 0, sizeof(redisKey));
-        memset(&newValue[0], 0, sizeof(newValue));
-        memset(&oldValue[0], 0, sizeof(oldValue));
+    	received_len = read(peer_socket, &aofLength, sizeof(int32_t));
+    	aofLength = ntohl(aofLength);
+       	if( received_len < 1 ){
+        	log_error("Error on receiving aof size --> %s", strerror(errno));
+        	goto error;
+        }
 
-    	/* Receive the redisKey size in unencrypted format */
-    	received_len = read(peer_socket, &tempInt, sizeof(int32_t));
-    	keyLength = ntohl(tempInt);
-    	if( received_len < 1 ){
-    		log_error("Error on receiving key size --> %s", strerror(errno));
-    		goto error;
-    	}
-    	/* Receive the newValue size in unencrypted format */
-    	received_len = read(peer_socket, &tempInt, sizeof(int32_t));
-    	newValueLength = ntohl(tempInt);
-    	if( received_len < 1 ){
-    		log_error("Error on receiving new value size --> %s", strerror(errno));
-    		goto error;
-    	}
-    	/* Receive the oldValue size in unencrypted format */
-    	received_len = read(peer_socket, &tempInt, sizeof(int32_t));
-    	oldValueLength = ntohl(tempInt);
-    	if( received_len < 1 ){
-    		log_error("Error on receiving old value size --> %s", strerror(errno));
-    		goto error;
-    	}
-    	log_info("key length: %d new value length: %d old value length: %d", keyLength, newValueLength, oldValueLength);
+        memset(&aof[0], 0, sizeof(aof));
+    	received_len = read(peer_socket, &aof, aofLength);
+       	if( received_len < 1 ){
+        	log_error("Error on receiving aof file --> %s", strerror(errno));
+        	goto error;
+        }
+       	loga("AOF: \n%s", aof);
 
+       	//TODO: add the decryption here;
 
-    	/* Receive the newValue in unencrypted format */
-    	received_len = read(peer_socket, &redisKey, keyLength);
-    	if( received_len < 1 ){
-    		log_error("Error on receiving key --> %s", strerror(errno));
-    		goto error;
-    	}
-    	/* Receive the newKey in unencrypted format */
-    	received_len = read(peer_socket, &newValue, newValueLength);
-    	if( received_len < 1 ){
-    		log_error("Error on receiving new value --> %s", strerror(errno));
-    		log_error("problem in key: %s -- seq: %d", redisKey, i+1);
-    		goto error;
-    	}
-    	/* Receive the newKey in unencrypted format */
-    	received_len = read(peer_socket, &oldValue, oldValueLength);
-    	if( received_len < 0 ){
-    		log_error("Error on receiving old value --> %s", redisKey, strerror(errno));
-    		log_error("problem in key: %s -- seq: %d", redisKey, i+1);
-    		goto error;
-    	}
-    	else if ( received_len == 0 ){
-    		loga("old value was empty - no problem we continue");
-    	}
-
-    	loga("Received: %d of %d --- key: %s new value: %s old value: %s", i+1, numberOfKeys, redisKey, newValue, oldValue);
-
-
-        char *argv[] = { "redis-cli -p 22122 COMPARESET"};
-    	   char *envp[] =
-    	    {
-    	    	redisKey,
-				newValue,
-				oldValue,
-    	    };
-    	execve(argv[0], &argv[0], envp);
-
-/*    	memset(&command[0], 0, sizeof(command));
-    	sprintf(command, "redis-cli -p 22122 COMPARESET %s %s %s", redisKey, newValue, oldValue);
-
-    	sys_ret = system(command);											//TODO: remove the system call to something faster.
-    	if( sys_ret < 0 ){
-    		log_error("Error on system call --> %s", strerror(errno));
-    		goto error;
-    	}
-    	*/
+       	written_len = write(redis_socket, &aof, aofLength);
+       	if( written_len < 1 ){
+        	log_error("Error on writing to Redis --> %s", strerror(errno));
+        	goto error;
+        }
     }
 
 	/* Clean up */
 	EVP_cleanup();
     ERR_free_strings();
 	close(peer_socket);
+	close(redis_socket);
 	loga("entropy rcv closing socket gracefully.");
   	return;
 
 error:
   	close(peer_socket);
+  	if(redis_socket > -1)
+  		close(redis_socket);
+
   	loga("entropy rcv closing socket because of error.");
   	return;
 
@@ -209,7 +192,7 @@ entropy_loop(void *arg)
  * Checks if resources are available, and initializes the connection information.
  * Loads the IV and creates a new thread to loop for the entropy receive.
  *
- *  returns: r_status for the status of opening of the new connection.
+ *  returns: rstatus_t for the status of opening of the new connection.
  */
 
 static rstatus_t
@@ -258,8 +241,9 @@ struct entropy *entropy_rcv_init(uint16_t entropy_port, char *entropy_ip, struct
     string_set_raw(&cn->addr, entropy_ip);
 
     cn->entropy_ts = (int64_t)time(NULL);
-    cn->tid = (pthread_t) -1; //Initialize thread id to -1
-    cn->sd = -1; // Initialize socket descriptor to -1
+    cn->tid = (pthread_t) -1; 	//Initialize thread id to -1
+    cn->sd = -1; 				// Initialize socket descriptor to -1
+    cn->redis_sd = -1;			// Initialize redis socket descriptor to -1
 
     status = entropy_conn_start(cn);
     if (status != DN_OK) {
