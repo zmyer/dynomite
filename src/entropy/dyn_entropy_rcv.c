@@ -63,6 +63,33 @@ redisConnector(){
 
 }
 
+/*
+ * Function:  entropy_rcv_crypto_init
+ * --------------------
+ *
+ * Initialize crypto libraries
+ */
+static void
+entropy_rcv_crypto_init()
+{
+    ERR_load_crypto_strings();
+    OpenSSL_add_all_algorithms();
+    OPENSSL_config(NULL);
+}
+
+/*
+ * Function:  entropy_rcv_crypto_deinit
+ * --------------------
+ *
+ * Clean crypto
+ */
+static void
+entropy_rcv_crypto_deinit()
+{
+	EVP_cleanup();
+    ERR_free_strings();
+}
+
 
 /*
  * Function:  entropy_rcv_callback
@@ -77,8 +104,11 @@ entropy_rcv_callback(void *arg1, void *arg2)
     ssize_t         received_len, written_len;
     int 			peer_socket,redis_socket;
     char 			aof[BUFFER_SIZE];
+    char            buff[BUFFER_SIZE];
+    unsigned char ciphertext[CIPHER_SIZE];
     int32_t 		aofLength;
     int32_t			tempInt;
+    int 			ciphertext_len = 0;
     int 			sys_ret = 0;
     int 			i = 0;
     int 			numberOfKeys;
@@ -91,31 +121,41 @@ entropy_rcv_callback(void *arg1, void *arg2)
    	    return;
     }
 
+    /* Check the encryption flag */
     if(ENCRYPT_FLAG == 0){
-    	loga("Encryption is disabled for reconciliation");
+    	loga("WARNING: Encryption is disabled for reconciliation");
+    }
+    else{
+    	entropy_crypto_init();
     }
 
+    /* Open the peer socket */
     peer_socket = accept(st->sd, NULL, NULL);
     if(peer_socket < 0){
-    	log_error("peer socket coould not be established");
+    	log_error("peer socket could not be established");
     	goto error;
     }
     loga("Spark downloader socket connection accepted"); //TODO: print information about the socket IP address.
 
 
-    /* Initialize the crypto library */
-    ERR_load_crypto_strings();
-    OpenSSL_add_all_algorithms();
-    OPENSSL_config(NULL);
-
     /* Processing header for number of Keys */
-    received_len = read(peer_socket, &tempInt, sizeof(int32_t));
-    numberOfKeys = ntohl(tempInt);
-    if( received_len < 1 ){
-    	log_error("Error on receiving number of keys --> %s", strerror(errno));
-    	goto error;
+    if(ENCRYPT_FLAG == 1) {
+       ciphertext_len = entropy_decrypt (ciphertext, HEADER_SIZE, buff);
+       if(ciphertext_len <0)
+       {
+        	log_error("Error encrypting the AOF file size");
+         	goto error;
+       }
     }
-    else if (numberOfKeys < 0) {
+    else{
+    	received_len = read(peer_socket, &tempInt, sizeof(int32_t));
+        numberOfKeys = ntohl(tempInt);
+        if( received_len < 1 ){
+        	log_error("Error on receiving number of keys --> %s", strerror(errno));
+        	goto error;
+        }
+    }
+    if (numberOfKeys < 0) {
     	log_error("receive header not processed properly");
     	goto error;
     }
@@ -130,7 +170,6 @@ entropy_rcv_callback(void *arg1, void *arg2)
     if(redis_socket == -1){
     	goto error;
     }
-
 
     /* Iterating around the keys */
     for(i=0; i<numberOfKeys; i++){
@@ -159,19 +198,24 @@ entropy_rcv_callback(void *arg1, void *arg2)
     }
 
 	/* Clean up */
-	EVP_cleanup();
-    ERR_free_strings();
+    if(ENCRYPT_FLAG == 1)
+    	entropy_crypto_deinit();
+
 	close(peer_socket);
 	close(redis_socket);
 	loga("entropy rcv closing socket gracefully.");
   	return;
 
 error:
-  	close(peer_socket);
+	/* Clean resources after error */
+	if(ENCRYPT_FLAG == 1)
+		entropy_crypto_deinit();
+
+	close(peer_socket);
   	if(redis_socket > -1)
   		close(redis_socket);
 
-  	loga("entropy rcv closing socket because of error.");
+  	log_error("entropy rcv closing socket because of error.");
   	return;
 
 

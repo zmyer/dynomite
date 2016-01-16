@@ -42,6 +42,35 @@ static unsigned char *theIv = (unsigned char*)"0123456789012345";
 
 
 /*
+ * Function:  entropy_crypto_init
+ * --------------------
+ *
+ * Initialize crypto libraries per connection
+ */
+void
+entropy_crypto_init()
+{
+	    ERR_load_crypto_strings();
+	    OpenSSL_add_all_algorithms();
+	    OPENSSL_config(NULL);
+}
+
+/*
+ * Function:  entropy_crypto_deinit()
+ * --------------------
+ *
+ * Clean crypto libraries per connection
+ */
+void
+entropy_crypto_deinit()
+{
+	EVP_cleanup();
+	ERR_free_strings();
+}
+
+
+
+/*
  * Function: entropy_decrypt
  * --------------------
  *  Decrypt the input data using the key and the Initialization Vector (IV).
