@@ -64,7 +64,6 @@ compact_aof(){
     return DN_OK;
 }
 
-
 /*
  * Function:  entropy_snd_callback
  * --------------------
@@ -100,13 +99,12 @@ entropy_snd_callback(void *arg1, void *arg2)
     }
 
     if(ENCRYPT_FLAG == 0){
-    	loga("Encryption is disabled for reconciliation");
+    	loga("WARNING: Encryption is disabled for reconciliation");
+    }
+    else{
+    	entropy_snd_crypto_init();
     }
 
-    /* Initialize the crypto library */
-    ERR_load_crypto_strings();
-    OpenSSL_add_all_algorithms();
-    OPENSSL_config(NULL);
 
     /* accept the connection */
     peer_socket = accept(st->sd, NULL, NULL);
@@ -164,9 +162,11 @@ entropy_snd_callback(void *arg1, void *arg2)
         }
         loga("Ciphertext Length is %d",ciphertext_len);
     	transmit_len = send(peer_socket, ciphertext, sizeof(ciphertext), 0);
+        loga("The size of the cipher text is %d",sizeof(ciphertext));
     }
     else{
     	transmit_len = send(peer_socket, buff, sizeof(buff), 0);
+    	loga("The size of header is %d",sizeof(buff));
     }
 
 	if (transmit_len < 0)
@@ -175,11 +175,10 @@ entropy_snd_callback(void *arg1, void *arg2)
     	goto error;
     }
 	else if (transmit_len > CIPHER_SIZE){
-		log_error("Transmit Length is longer than CIPHER SIZE --> "
+		log_error("Header Transmit Length is longer than CIPHER SIZE --> "
 				"transmit: %d cipher size: %d", transmit_len, CIPHER_SIZE);
     	 goto error;
 	}
-    loga("The size of the cipher text is %d",sizeof(ciphertext));
 
 
 	/* Determine the number of chunks
@@ -244,21 +243,24 @@ entropy_snd_callback(void *arg1, void *arg2)
 
     }
 
-	/* close the file descriptor */
+	/* clean up */
+	if(ENCRYPT_FLAG == 1)
+		entropy_crypto_deinit();
+
 	fclose(fp);
 	close(peer_socket);
     loga("Chunks transferred: %d ---> AOF transfer completed!", i);
 
-	/* Clean up */
-	EVP_cleanup();
-    ERR_free_strings();
-
     return;
 
 error:
+	/* clean up resources after error */
+	if(ENCRYPT_FLAG == 1)
+		entropy_crypto_deinit();
+
 	fclose(fp);
 	close(peer_socket);
-	loga("closing socket because of entropy error.");
+	log_error("Closing socket because of entropy error.");
     return;
 
 }
