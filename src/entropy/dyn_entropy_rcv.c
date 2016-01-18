@@ -44,8 +44,6 @@
 static int
 redisConnector(){
     /* opening the socket to local Redis */
-    struct hostent *server;
-
     struct sockaddr_in serv_addr;
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0){
@@ -64,34 +62,6 @@ redisConnector(){
 }
 
 /*
- * Function:  entropy_rcv_crypto_init
- * --------------------
- *
- * Initialize crypto libraries
- */
-static void
-entropy_rcv_crypto_init()
-{
-    ERR_load_crypto_strings();
-    OpenSSL_add_all_algorithms();
-    OPENSSL_config(NULL);
-}
-
-/*
- * Function:  entropy_rcv_crypto_deinit
- * --------------------
- *
- * Clean crypto
- */
-static void
-entropy_rcv_crypto_deinit()
-{
-	EVP_cleanup();
-    ERR_free_strings();
-}
-
-
-/*
  * Function:  entropy_rcv_callback
  * --------------------
  *
@@ -101,17 +71,17 @@ entropy_rcv_crypto_deinit()
 static void
 entropy_rcv_callback(void *arg1, void *arg2)
 {
-    ssize_t         received_len, written_len;
-    int 			peer_socket,redis_socket;
+    int 			peer_socket;
+    int 			redis_socket = 0;
     char 			aof[BUFFER_SIZE];
     char            buff[BUFFER_SIZE];
     unsigned char ciphertext[CIPHER_SIZE];
     int32_t 		aofLength;
     int32_t			tempInt;
     int 			ciphertext_len = 0;
-    int 			sys_ret = 0;
     int 			i = 0;
     int 			numberOfKeys;
+    struct sockaddr_in spark_addr;
 
 
     int n = *((int *)arg2);
@@ -121,13 +91,9 @@ entropy_rcv_callback(void *arg1, void *arg2)
    	    return;
     }
 
-    /* Check the encryption flag */
-    if(ENCRYPT_FLAG == 0){
-    	loga("WARNING: Encryption is disabled for reconciliation");
-    }
-    else{
-    	entropy_crypto_init();
-    }
+    /* Check the encryption flag and initialize the crypto */
+    if(ENCRYPT_FLAG == 1){entropy_crypto_init();}
+    else{loga("WARNING: Encryption is disabled for receiver reconciliation");}
 
     /* Open the peer socket */
     peer_socket = accept(st->sd, NULL, NULL);
@@ -137,23 +103,28 @@ entropy_rcv_callback(void *arg1, void *arg2)
     }
     loga("Spark downloader socket connection accepted"); //TODO: print information about the socket IP address.
 
-
     /* Processing header for number of Keys */
     if(ENCRYPT_FLAG == 1) {
-       ciphertext_len = entropy_decrypt (ciphertext, HEADER_SIZE, buff);
-       if(ciphertext_len <0)
-       {
-        	log_error("Error encrypting the AOF file size");
+    	int bytesRead = read(peer_socket, ciphertext, CIPHER_SIZE);
+    	if( bytesRead < 1 ){
+    	    log_error("Error on receiving number of keys --> %s", strerror(errno));
+    	    goto error;
+    	}
+    	loga("Bytes read %d", bytesRead);
+    	if( entropy_decrypt (ciphertext, BUFFER_SIZE, buff) < 0 )
+    	{
+        	log_error("Error decrypting the AOF file size");
          	goto error;
-       }
+    	}
+    	numberOfKeys = ntohl(buff);
+
     }
     else{
-    	received_len = read(peer_socket, &tempInt, sizeof(int32_t));
-        numberOfKeys = ntohl(tempInt);
-        if( received_len < 1 ){
+        if( read(peer_socket, &tempInt, sizeof(int32_t)) < 1 ){
         	log_error("Error on receiving number of keys --> %s", strerror(errno));
         	goto error;
         }
+        numberOfKeys = ntohl(tempInt);
     }
     if (numberOfKeys < 0) {
     	log_error("receive header not processed properly");
@@ -173,25 +144,50 @@ entropy_rcv_callback(void *arg1, void *arg2)
 
     /* Iterating around the keys */
     for(i=0; i<numberOfKeys; i++){
-    	received_len = read(peer_socket, &aofLength, sizeof(int32_t));
-    	aofLength = ntohl(aofLength);
-       	if( received_len < 1 ){
-        	log_error("Error on receiving aof size --> %s", strerror(errno));
-        	goto error;
-        }
 
-        memset(&aof[0], 0, sizeof(aof));
-    	received_len = read(peer_socket, &aof, aofLength);
-       	if( received_len < 1 ){
-        	log_error("Error on receiving aof file --> %s", strerror(errno));
-        	goto error;
+    	/*
+    	 * if the encrypt flag is set then, we need to decrypt the aof size
+    	 * and then decrypt the key/OldValue/newValue in Redis serialized format.
+    	 */
+        if(ENCRYPT_FLAG == 1) {
+        	if( read(peer_socket, ciphertext, CIPHER_SIZE) < 1 ){
+        	   log_error("Error on receiving aof size --> %s", strerror(errno));
+        	   goto error;
+        	}
+           	if( entropy_decrypt (ciphertext, BUFFER_SIZE, buff) < 0 )
+            {
+                log_error("Error decrypting the buffer for AOF file size");
+                goto error;
+            }
+           	aofLength = ntohl(buff);
+        	loga("AOF Length: %d", aofLength);
+            memset(&aof[0], 0, sizeof(aof));
+            if( read(peer_socket, ciphertext, CIPHER_SIZE) < 1 ){
+                log_error("Error on receiving aof size --> %s", strerror(errno));
+                goto error;
+            }
+            if( entropy_decrypt (ciphertext, BUFFER_SIZE, aof) < 0 )		//TODO: I am not sure the BUFFER_SIZE is correct here.
+            {
+                log_error("Error decrypting the buffer for key/oldValue/newValue");
+                goto error;
+             }
+        }
+        else{
+           	if( read(peer_socket, &aofLength, sizeof(int32_t)) < 1 ){
+            	log_error("Error on receiving aof size --> %s", strerror(errno));
+            	goto error;
+            }
+        	aofLength = ntohl(aofLength);
+        	loga("AOF Length: %d", aofLength);
+            memset(&aof[0], 0, sizeof(aof));
+           	if( read(peer_socket, &aof, aofLength) < 1 ){
+            	log_error("Error on receiving aof file --> %s", strerror(errno));
+            	goto error;
+            }
         }
        	loga("AOF: \n%s", aof);
 
-       	//TODO: add the decryption here;
-
-       	written_len = write(redis_socket, &aof, aofLength);
-       	if( written_len < 1 ){
+       	if( write(redis_socket, &aof, aofLength) < 1 ){
         	log_error("Error on writing to Redis --> %s", strerror(errno));
         	goto error;
         }

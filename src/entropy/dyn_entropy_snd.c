@@ -102,7 +102,7 @@ entropy_snd_callback(void *arg1, void *arg2)
     	loga("WARNING: Encryption is disabled for reconciliation");
     }
     else{
-    	entropy_snd_crypto_init();
+    	entropy_crypto_init();
     }
 
 
@@ -324,7 +324,7 @@ struct entropy *entropy_snd_init(uint16_t entropy_port, char *entropy_ip, struct
     /* Loading of key/iv happens only once by calling entropy_key_iv_load which is a util function.
      * The same key/iv are reused in the entropy_rcv_init as well.
      */
-    if(entropy_key_iv_load(ctx) == DN_ERROR){
+    if(entropy_key_iv_load(ctx) == DN_ERROR){										//TODO: we do not need to do that if encryption flag is not set.
     	log_error("recon_key.pem or recon_iv.pem cannot be loaded properly");
         goto error;
     }
