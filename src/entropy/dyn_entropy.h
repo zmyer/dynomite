@@ -26,13 +26,13 @@
 #define ENTROPY_RCV_PORT	  8106
 
 #define ENCRYPT_FLAG			1
+#define DECRYPT_FLAG			0
 #define COMPRESS_FLAG			0
-#define CIPHER_SIZE				1024
-#define BUFFER_SIZE				512
-#define HEADER_SIZE				512 // HEADER_SIZE must always be smaller than CIPHER_SIZE
+#define CIPHER_SIZE				2048
+#define BUFFER_SIZE				1024
+#define HEADER_SIZE				1024   // HEADER_SIZE must be smaller than CIPHER_SIZE
 
 #define AOF_TO_SEND		"/mnt/data/nfredis/appendonly.aof"	/* later on add as command line property */
-#define GZIP_TO_SEND 	"/mnt/data/appendonly0.aof.gz"			//TODO: we need to implement this
 
 
 /* this indicates if the key and iv have been loaded */

@@ -35,15 +35,16 @@
 #include "dyn_core.h"
 
 /*
- * Function:  redisConnector
+ * Function:  entropy_redis_connector
  * --------------------
  *
  *  returns: rstatus_t for the status of opening of the redis connection.
  */
 
 static int
-redisConnector(){
-    /* opening the socket to local Redis */
+entropy_redis_connector(){
+    loga("trying to connect to Redis...");
+
     struct sockaddr_in serv_addr;
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0){
@@ -54,9 +55,12 @@ redisConnector(){
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); /* set destination IP number - localhost, 127.0.0.1*/
     serv_addr.sin_port = htons(22122);
-    if (connect(sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0)
+    if (connect(sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0){
+    	log_error("connecting to Redis failed");
+    	return -1;
+    }
 
-    loga("redis-server connection established");
+    loga("redis-server connection established: %d", sockfd);
     return sockfd;
 
 }
@@ -82,6 +86,7 @@ entropy_rcv_callback(void *arg1, void *arg2)
     int 			i = 0;
     int 			numberOfKeys;
     struct sockaddr_in spark_addr;
+	int redis_written_bytes = 0;
 
 
     int n = *((int *)arg2);
@@ -92,8 +97,8 @@ entropy_rcv_callback(void *arg1, void *arg2)
     }
 
     /* Check the encryption flag and initialize the crypto */
-    if(ENCRYPT_FLAG == 1){entropy_crypto_init();}
-    else{loga("WARNING: Encryption is disabled for receiver reconciliation");}
+    if(DECRYPT_FLAG == 1){entropy_crypto_init();}
+    else{loga("Encryption is disabled for entropy receiver");}
 
     /* Open the peer socket */
     peer_socket = accept(st->sd, NULL, NULL);
@@ -104,7 +109,7 @@ entropy_rcv_callback(void *arg1, void *arg2)
     loga("Spark downloader socket connection accepted"); //TODO: print information about the socket IP address.
 
     /* Processing header for number of Keys */
-    if(ENCRYPT_FLAG == 1) {
+    if(DECRYPT_FLAG == 1) {
     	int bytesRead = read(peer_socket, ciphertext, CIPHER_SIZE);
     	if( bytesRead < 1 ){
     	    log_error("Error on receiving number of keys --> %s", strerror(errno));
@@ -137,7 +142,7 @@ entropy_rcv_callback(void *arg1, void *arg2)
     loga("Expected number of keys: %d", numberOfKeys);
 
     /* Connect to redis-server */
-    redis_socket = redisConnector();
+    redis_socket = entropy_redis_connector();
     if(redis_socket == -1){
     	goto error;
     }
@@ -149,7 +154,7 @@ entropy_rcv_callback(void *arg1, void *arg2)
     	 * if the encrypt flag is set then, we need to decrypt the aof size
     	 * and then decrypt the key/OldValue/newValue in Redis serialized format.
     	 */
-        if(ENCRYPT_FLAG == 1) {
+        if(DECRYPT_FLAG == 1) {
         	if( read(peer_socket, ciphertext, CIPHER_SIZE) < 1 ){
         	   log_error("Error on receiving aof size --> %s", strerror(errno));
         	   goto error;
@@ -160,7 +165,7 @@ entropy_rcv_callback(void *arg1, void *arg2)
                 goto error;
             }
            	aofLength = ntohl(buff);
-        	loga("AOF Length: %d", aofLength);
+        	log_info("AOF Length: %d", aofLength);
             memset(&aof[0], 0, sizeof(aof));
             if( read(peer_socket, ciphertext, CIPHER_SIZE) < 1 ){
                 log_error("Error on receiving aof size --> %s", strerror(errno));
@@ -178,23 +183,24 @@ entropy_rcv_callback(void *arg1, void *arg2)
             	goto error;
             }
         	aofLength = ntohl(aofLength);
-        	loga("AOF Length: %d", aofLength);
+        	log_info("AOF Length: %d", aofLength);
             memset(&aof[0], 0, sizeof(aof));
            	if( read(peer_socket, &aof, aofLength) < 1 ){
             	log_error("Error on receiving aof file --> %s", strerror(errno));
             	goto error;
             }
         }
-       	loga("AOF: \n%s", aof);
-
-       	if( write(redis_socket, &aof, aofLength) < 1 ){
-        	log_error("Error on writing to Redis --> %s", strerror(errno));
+       	loga("Key: %d/%d - Redis serialized form: \n%s", i+1,numberOfKeys,aof);
+       	redis_written_bytes = write(redis_socket, &aof, aofLength);
+       	if( redis_written_bytes < 1 ){
+        	log_error("Error on writing to Redis, bytes: %d --> %s", redis_written_bytes, strerror(errno));
         	goto error;
         }
+       	loga("Bytes written to Redis %d", redis_written_bytes);
     }
 
 	/* Clean up */
-    if(ENCRYPT_FLAG == 1)
+    if(DECRYPT_FLAG == 1)
     	entropy_crypto_deinit();
 
 	close(peer_socket);
@@ -204,7 +210,7 @@ entropy_rcv_callback(void *arg1, void *arg2)
 
 error:
 	/* Clean resources after error */
-	if(ENCRYPT_FLAG == 1)
+	if(DECRYPT_FLAG == 1)
 		entropy_crypto_deinit();
 
 	close(peer_socket);
