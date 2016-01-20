@@ -34,7 +34,7 @@
 #include "dyn_core.h"
 
 /*
- * Function:  compact_aof
+ * Function:  entropy_redis_compact_aof
  * --------------------
  *
  * Performs background Redis rewrite of aof.
@@ -43,7 +43,7 @@
  */
 
 static rstatus_t
-compact_aof(){
+entropy_redis_compact_aof(){
 	char 			command[BUFFER_SIZE];
     int 			sys_ret = 0;
 
@@ -59,6 +59,10 @@ compact_aof(){
 		    log_error("Error on bgrewriteaof for seconds time --> %s", strerror(errno));
 			return DN_ERROR;
 	    }
+    }
+    else if( sys_ret > 0 ){
+    	log_error("Cannot connect to Redis on port 22122: %d", sys_ret);
+    	return DN_ERROR;
     }
     loga("Redis BGREWRITEAOF completed");
     return DN_OK;
@@ -115,7 +119,7 @@ entropy_snd_callback(void *arg1, void *arg2)
     loga("Spark socket connection accepted"); //TODO: print information about the socket IP address.
 
     /* compact AOF in Redis before sending to Spark */
-    if(compact_aof() == DN_ERROR){
+    if(entropy_redis_compact_aof() == DN_ERROR){
     	log_error("Redis failed to perform bgrewriteaof");
     	goto error;
     }
@@ -127,17 +131,24 @@ entropy_snd_callback(void *arg1, void *arg2)
     	log_error("Error opening Redis AOF file: %s", strerror(errno));
     	goto error;
     }
-    loga("Redis AOF loaded successfully");
 
     /* Get the file descriptor from the file pointer */
     fd = fileno(fp);
 
-    /* Get the file size to include in the header */
+    /* Get the file size */
     if (fstat(fd, &file_stat) < 0)
     {
     	 log_error("Error fstat --> %s", strerror(errno));
      	 goto error;
     }
+
+    /* No file AOF found to send */
+    if(file_stat.st_size == 0){
+    	log_error("Cannot retrieve an AOF file in %s", AOF_TO_SEND);
+    	 goto error;
+    }
+    loga("Redis appendonly.aof ready to be sent");
+
 
     /* Constructing the header: file size & buffer size */
     memset(&buff[0], 0, sizeof(buff));
@@ -160,7 +171,7 @@ entropy_snd_callback(void *arg1, void *arg2)
         	log_error("Error encrypting the AOF file size");
         	goto error;
         }
-        loga("Ciphertext Length is %d",ciphertext_len);
+        log_info("Ciphertext Length is %d",ciphertext_len);
     	transmit_len = send(peer_socket, ciphertext, sizeof(ciphertext), 0);
         loga("The size of the cipher text is %d",sizeof(ciphertext));
     }
@@ -258,9 +269,11 @@ error:
 	if(ENCRYPT_FLAG == 1)
 		entropy_crypto_deinit();
 
-	fclose(fp);
+	if(fp!=NULL)
+		fclose(fp);
+
 	close(peer_socket);
-	log_error("Closing socket because of entropy error.");
+	log_error("Closing entropy socket (check for above for possible errors).");
     return;
 
 }
