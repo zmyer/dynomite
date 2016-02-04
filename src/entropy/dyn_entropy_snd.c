@@ -33,6 +33,10 @@
 
 #include "dyn_core.h"
 
+#define ENCRYPT_FLAG			0
+#define AOF_TO_SEND		"/mnt/data/nfredis/appendonly.aof"	/* later on add as command line property */
+
+
 /*
  * Function:  entropy_redis_compact_aof
  * --------------------
@@ -52,8 +56,8 @@ entropy_redis_compact_aof(){
     sys_ret = system(command);
     if( sys_ret < 0 ){
 	    log_error("Error on system call --> %s", strerror(errno));
-	    loga("Thread sleeping 2 seconds and retrying");
-	    sleep(2);
+	    loga("Thread sleeping 10 seconds and retrying");
+	    sleep(10);
 	    sys_ret = system(command);
 	    if( sys_ret < 0 ){
 		    log_error("Error on bgrewriteaof for seconds time --> %s", strerror(errno));
@@ -69,6 +73,59 @@ entropy_redis_compact_aof(){
 }
 
 /*
+ * Function:  header_send
+ * --------------------
+ *
+ * Sending summary information in a header;
+ * Header Format: file size | buffer size | cipher size | encryption | data store
+ *
+ */
+static rstatus_t
+header_send(struct stat file_stat, int peer_socket)
+{
+    char			header_buff[HEADER_SIZE];
+    ssize_t         transmit_len;
+
+    memset(&header_buff[0], 0, sizeof(header_buff));
+    header_buff[0] = (int)((((int)file_stat.st_size) >> 24) & 0xFF);
+    header_buff[1] = (int)((((int)file_stat.st_size) >> 16) & 0xFF);
+    header_buff[2] = (int)((((int)file_stat.st_size) >> 8) & 0XFF);
+    header_buff[3] = (int)((((int)file_stat.st_size) & 0XFF));
+
+    header_buff[4] = (int)((BUFFER_SIZE >> 24) & 0xFF);
+    header_buff[5] = (int)((BUFFER_SIZE >> 16) & 0xFF);
+    header_buff[6] = (int)((BUFFER_SIZE >> 8) & 0XFF);
+    header_buff[7] = (int)((BUFFER_SIZE & 0XFF));
+
+    header_buff[8] = (int)((CIPHER_SIZE >> 24) & 0xFF);
+    header_buff[9] = (int)((CIPHER_SIZE >> 16) & 0xFF);
+    header_buff[10] = (int)((CIPHER_SIZE >> 8) & 0XFF);
+    header_buff[11] = (int)((CIPHER_SIZE & 0XFF));
+
+    // TODO: encrypt flag does not have to be int but a single byte.
+    header_buff[12] = (int)((ENCRYPT_FLAG >> 24) & 0xFF);
+    header_buff[13] = (int)((ENCRYPT_FLAG >> 16) & 0xFF);
+    header_buff[14] = (int)((ENCRYPT_FLAG >> 8) & 0XFF);
+    header_buff[15] = (int)((ENCRYPT_FLAG & 0XFF));
+
+    //TODO: we can add data store information as well
+
+  	transmit_len = send(peer_socket, header_buff, sizeof(header_buff), 0);
+  	if (transmit_len < 0)
+  	{
+  	    log_error("Error on sending AOF file size --> %s", strerror(errno));
+      	return DN_ERROR;
+    }
+  	else if (transmit_len > CIPHER_SIZE){
+  		log_error("Header Transmit Length is longer than CIPHER SIZE --> "
+  				"transmit: %d cipher size: %d", transmit_len, CIPHER_SIZE);
+      	return DN_ERROR;
+  	}
+  	loga("The size of header is %d",sizeof(header_buff)); //TODO: this can be moved to log_info
+  	return DN_OK;
+}
+
+/*
  * Function:  entropy_snd_callback
  * --------------------
  *
@@ -80,10 +137,11 @@ entropy_snd_callback(void *arg1, void *arg2)
 {
     struct stat     file_stat;
     ssize_t         transmit_len;
+    ssize_t			data_trasmitted = 0;
     int peer_socket;
     FILE			*fp = NULL;
     int             fd;
-    char            buff[BUFFER_SIZE];
+    char            data_buff[BUFFER_SIZE];
     unsigned char ciphertext[CIPHER_SIZE];
     int ciphertext_len = 0;
     size_t 			nread;
@@ -94,11 +152,8 @@ entropy_snd_callback(void *arg1, void *arg2)
 
     struct entropy *st = arg1;
 
-
     /* check for issues */
     if (n == 0 || CIPHER_SIZE < BUFFER_SIZE) {
-  //  	log_error("cipher or header size are bigger than buffer size");
-  //  	log_error("cipher size: %d -  buffer size: %d - header_size: %d", CIPHER_SIZE, BUFFER_SIZE, HEADER_SIZE);
    	    return;
     }
 
@@ -113,7 +168,7 @@ entropy_snd_callback(void *arg1, void *arg2)
     /* accept the connection */
     peer_socket = accept(st->sd, NULL, NULL);
     if(peer_socket < 0){
-    	log_error("peer socket coould not be established");
+    	log_error("peer socket could not be established");
     	goto error;
     }
     loga("Spark socket connection accepted"); //TODO: print information about the socket IP address.
@@ -123,6 +178,8 @@ entropy_snd_callback(void *arg1, void *arg2)
     	log_error("Redis failed to perform bgrewriteaof");
     	goto error;
     }
+    /* short sleep to finish AOF rewriting */
+    sleep(1);
 
     /* create a file pointer for the AOF */
     fp = fopen(AOF_TO_SEND, "r");
@@ -145,52 +202,15 @@ entropy_snd_callback(void *arg1, void *arg2)
     /* No file AOF found to send */
     if(file_stat.st_size == 0){
     	log_error("Cannot retrieve an AOF file in %s", AOF_TO_SEND);
-    	 goto error;
+    	goto error;
     }
     loga("Redis appendonly.aof ready to be sent");
 
 
-    /* Constructing the header: file size & buffer size */
-    memset(&buff[0], 0, sizeof(buff));
-    buff[0] = (int)((((int)file_stat.st_size) >> 24) & 0xFF);
-    buff[1] = (int)((((int)file_stat.st_size) >> 16) & 0xFF);
-    buff[2] = (int)((((int)file_stat.st_size) >> 8) & 0XFF);
-    buff[3] = (int)((((int)file_stat.st_size) & 0XFF));
-
-    buff[4] = (int)((BUFFER_SIZE >> 24) & 0xFF);
-    buff[5] = (int)((BUFFER_SIZE >> 16) & 0xFF);
-    buff[6] = (int)((BUFFER_SIZE >> 8) & 0XFF);
-    buff[7] = (int)((BUFFER_SIZE & 0XFF));
-
-
-    /* Header transmission */
-    if(ENCRYPT_FLAG == 1) {
-        ciphertext_len = entropy_encrypt (buff, HEADER_SIZE, ciphertext);
-        if(ciphertext_len <0)
-        {
-        	log_error("Error encrypting the AOF file size");
-        	goto error;
-        }
-        log_info("Ciphertext Length is %d",ciphertext_len);
-    	transmit_len = send(peer_socket, ciphertext, sizeof(ciphertext), 0);
-        loga("The size of the cipher text is %d",sizeof(ciphertext));
-    }
-    else{
-    	transmit_len = send(peer_socket, buff, sizeof(buff), 0);
-    	loga("The size of header is %d",sizeof(buff));
-    }
-
-	if (transmit_len < 0)
-	{
-	    log_error("Error on sending AOF file size --> %s", strerror(errno));
+    /* sending header */
+    if(header_send(file_stat, peer_socket)==DN_ERROR){
     	goto error;
     }
-	else if (transmit_len > CIPHER_SIZE){
-		log_error("Header Transmit Length is longer than CIPHER SIZE --> "
-				"transmit: %d cipher size: %d", transmit_len, CIPHER_SIZE);
-    	 goto error;
-	}
-
 
 	/* Determine the number of chunks
 	 * if the size of the file is larger than the Buffer size
@@ -208,31 +228,38 @@ entropy_snd_callback(void *arg1, void *arg2)
      */
    	last_chunk_size = (long)(file_stat.st_size - (nchunk-1) * BUFFER_SIZE);
 
-	loga("AOF File size %d - Chunk Size %d - Number of chunks %d - last chunk size: %ld",
-			file_stat.st_size, BUFFER_SIZE, nchunk, last_chunk_size);
+	loga("HEADER INFO: file size: %d -- buffer size: %d -- cipher size: %d -- encryption: %d ",
+			(int)file_stat.st_size, BUFFER_SIZE, CIPHER_SIZE, ENCRYPT_FLAG);
+	loga("CHUNK INFO: number of chunks: %d -- last chunk size: %ld", nchunk, last_chunk_size);
 
     for(i=0; i<nchunk; i++){
 
         /* clear buffer before using it */
-        memset(&buff[0], 0, sizeof(buff));
+        memset(data_buff, 0, sizeof(data_buff));
+
         /* Read file data in chunks of BUFFER_SIZE bytes */
-        if(i<nchunk-1){
-        	nread = fread (buff, sizeof(char), BUFFER_SIZE, fp);
-            ciphertext_len = entropy_encrypt (buff, BUFFER_SIZE, ciphertext);
+        if(i < nchunk-1){
+        	nread = fread (data_buff, sizeof(char), BUFFER_SIZE, fp);
         }
         else{
-        	nread = fread (buff, sizeof(char), last_chunk_size, fp);
-            ciphertext_len = entropy_encrypt (buff, last_chunk_size, ciphertext);
+        	nread = fread (data_buff, sizeof(char), last_chunk_size, fp);
         }
+
         /* checking for errors */
     	if (nread < 0){
     		 log_error("Error reading chunk of AOF file --> %s", strerror(errno));
          	 goto error;
     	}
-
         /* transmit the chunk encrypted/unencrypted */
         if(ENCRYPT_FLAG == 1){
-        	if(ciphertext_len <0){
+        	if (i < nchunk-1){
+                ciphertext_len = entropy_encrypt (data_buff, BUFFER_SIZE, ciphertext);
+        	}
+        	else{
+                ciphertext_len = entropy_encrypt (data_buff, last_chunk_size, ciphertext);
+                loga("Size of last chunk: %d", sizeof(data_buff));
+        	}
+        	if(ciphertext_len < 0){
         		log_error("Error encrypting the AOF chunk --> %s", strerror(errno));
             	 goto error;
         	}
@@ -240,27 +267,37 @@ entropy_snd_callback(void *arg1, void *arg2)
         }
         else{
         	if(i<nchunk-1){
-        		transmit_len = send(peer_socket, buff, BUFFER_SIZE, 0);
+        		transmit_len = send(peer_socket, data_buff, BUFFER_SIZE, 0);
         	}
         	else{
-        		transmit_len = send(peer_socket, buff, last_chunk_size, 0);
+        		transmit_len = send(peer_socket, data_buff, last_chunk_size, 0);
         	}
         }
 
     	if (transmit_len < 0){
     		 log_error("Error sending the AOF chunk --> %s", strerror(errno));
+    		 log_error("Data transmitted up to error: %ld and chunks: %d", data_trasmitted, i+1);
          	 goto error;
     	}
-
+    	else if ( transmit_len == 0){
+    		 loga("No data in chunk");
+    	}
+    	else{
+    		data_trasmitted +=transmit_len;
+    	}
     }
+
+    loga("Chunks transferred: %d ---> AOF transfer completed!", i);
 
 	/* clean up */
 	if(ENCRYPT_FLAG == 1)
 		entropy_crypto_deinit();
 
-	fclose(fp);
+	if(fp!=NULL)
+		fclose(fp);
+
 	close(peer_socket);
-    loga("Chunks transferred: %d ---> AOF transfer completed!", i);
+    loga("Sender entropy resource cleaning complete");
 
     return;
 
@@ -273,7 +310,7 @@ error:
 		fclose(fp);
 
 	close(peer_socket);
-	log_error("Closing entropy socket (check for above for possible errors).");
+	log_error("Closing sender entropy socket (check for above for possible errors).");
     return;
 
 }
@@ -310,7 +347,6 @@ entropy_conn_start(struct entropy *cn)
 
     return DN_OK;
 }
-
 
 
 /*

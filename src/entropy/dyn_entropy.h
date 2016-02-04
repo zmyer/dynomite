@@ -25,14 +25,10 @@
 #define ENTROPY_RCV_ADDR      "0.0.0.0"		//TODO: pass later on IP address as configuration
 #define ENTROPY_RCV_PORT	  8106
 
-#define ENCRYPT_FLAG			1
-#define DECRYPT_FLAG			0
-#define COMPRESS_FLAG			0
-#define CIPHER_SIZE				2048
-#define BUFFER_SIZE				1024
-#define HEADER_SIZE				1024   // HEADER_SIZE must be smaller than CIPHER_SIZE
+#define BUFFER_SIZE				16384				  // BUFFER_SIZE 256KB
+#define CIPHER_SIZE				BUFFER_SIZE + 1024    // CIPHER_SIZE must be larger than BUFFER_SIZE
+#define HEADER_SIZE				512  				  // HEADER_SIZE must be smaller than CIPHER_SIZE
 
-#define AOF_TO_SEND		"/mnt/data/nfredis/appendonly.aof"	/* later on add as command line property */
 
 
 /* this indicates if the key and iv have been loaded */
