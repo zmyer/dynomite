@@ -34,6 +34,9 @@
 
 #include "dyn_core.h"
 
+#define DECRYPT_FLAG			0
+
+
 /*
  * Function:  entropy_redis_connector
  * --------------------
