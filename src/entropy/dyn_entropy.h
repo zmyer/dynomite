@@ -19,10 +19,10 @@
 
 #include "dyn_core.h"
 
-#define ENTROPY_SND_ADDR      "0.0.0.0"		//TODO: pass later on IP address as configuration
+#define ENTROPY_SND_ADDR      "0.0.0.0"
 #define ENTROPY_SND_PORT      8105
 
-#define ENTROPY_RCV_ADDR      "0.0.0.0"		//TODO: pass later on IP address as configuration
+#define ENTROPY_RCV_ADDR      "0.0.0.0"
 #define ENTROPY_RCV_PORT	  8106
 
 #define BUFFER_SIZE				16384				  // BUFFER_SIZE 256KB
