@@ -166,7 +166,7 @@ int entropy_encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *
   /* Clean up */
   EVP_CIPHER_CTX_free(ctx);
 
-
+ // loga("Block size: %d", EVP_CIPHER_block_size(ctx) );
 
   return ciphertext_len;
 }

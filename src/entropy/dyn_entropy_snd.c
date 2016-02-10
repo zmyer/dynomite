@@ -34,7 +34,8 @@
 #include "dyn_core.h"
 
 #define ENCRYPT_FLAG			0
-#define AOF_TO_SEND		"/mnt/data/nfredis/appendonly.aof"	/* later on add as command line property */
+#define LOG_CHUNK_LEVEL			2000 // every how many chunks to log
+#define AOF_TO_SEND		"/mnt/data/nfredis/appendonly.aof"	/* add in .yml */
 
 
 /*
@@ -123,6 +124,29 @@ header_send(struct stat file_stat, int peer_socket)
   	}
   	loga("The size of header is %d",sizeof(header_buff)); //TODO: this can be moved to log_info
   	return DN_OK;
+}
+
+/*
+ * Function:  entropy_send_stats
+ * --------------------
+ *
+ * Logging statistics about the transfer;
+ *
+ */
+static rstatus_t
+entropy_send_stats(int current_chunk, ssize_t bytes_in_window, int chunks_window, time_t start_time){
+	time_t elapsed_time = time(NULL) - start_time;
+	double chunk_thr = 0;
+	double byte_thr = 0;
+
+	if(elapsed_time > 0){
+        chunk_thr = (double)(chunks_window/elapsed_time);
+        byte_thr = (double)(bytes_in_window/elapsed_time)/1000000; //Divide by 1M for MB
+        loga("Transferring chunk %d (%.2f chunks/sec"
+        		 "  -- %.2f MB/sec)", current_chunk, chunk_thr, byte_thr);
+	}
+
+	return DN_OK;
 }
 
 /*
@@ -232,6 +256,10 @@ entropy_snd_callback(void *arg1, void *arg2)
 			(int)file_stat.st_size, BUFFER_SIZE, CIPHER_SIZE, ENCRYPT_FLAG);
 	loga("CHUNK INFO: number of chunks: %d -- last chunk size: %ld", nchunk, last_chunk_size);
 
+	time_t start_time = time(NULL);
+	int chunks_in_window = 0;
+	ssize_t bytes_in_window = 0;
+
     for(i=0; i<nchunk; i++){
 
         /* clear buffer before using it */
@@ -284,6 +312,15 @@ entropy_snd_callback(void *arg1, void *arg2)
     	}
     	else{
     		data_trasmitted +=transmit_len;
+    		chunks_in_window++;
+    		bytes_in_window +=transmit_len;
+    		if(i % LOG_CHUNK_LEVEL == 0 || i == nchunk){
+    			if(entropy_send_stats(i, bytes_in_window, chunks_in_window, start_time) == DN_ERROR){
+    				log_error("Logging stats has a problem for chunk $d", i);
+    			}
+    			bytes_in_window = 0;
+    			chunks_in_window = 0;
+    		}
     	}
     }
 
