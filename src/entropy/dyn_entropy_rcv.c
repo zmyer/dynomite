@@ -83,12 +83,10 @@ entropy_rcv_callback(void *arg1, void *arg2)
     char 			aof[BUFFER_SIZE];
     char            buff[BUFFER_SIZE];
     unsigned char ciphertext[CIPHER_SIZE];
-    int32_t 		aofLength;
+    int32_t 		keyValueLength;
     int32_t			tempInt;
-    int 			ciphertext_len = 0;
     int 			i = 0;
     int 			numberOfKeys;
-    struct sockaddr_in spark_addr;
 	int redis_written_bytes = 0;
 
 
@@ -100,8 +98,12 @@ entropy_rcv_callback(void *arg1, void *arg2)
     }
 
     /* Check the encryption flag and initialize the crypto */
-    if(DECRYPT_FLAG == 1){entropy_crypto_init();}
-    else{loga("Encryption is disabled for entropy receiver");}
+    if(DECRYPT_FLAG == 1){
+    	entropy_crypto_init();
+    }
+    else{
+    	loga("Encryption is disabled for entropy receiver");
+    }
 
     /* Open the peer socket */
     peer_socket = accept(st->sd, NULL, NULL);
@@ -167,8 +169,8 @@ entropy_rcv_callback(void *arg1, void *arg2)
                 log_error("Error decrypting the buffer for AOF file size");
                 goto error;
             }
-           	aofLength = ntohl(buff);
-        	log_info("AOF Length: %d", aofLength);
+           	keyValueLength = ntohl(buff);
+        	log_info("AOF Length: %d", keyValueLength);
             memset(&aof[0], 0, sizeof(aof));
             if( read(peer_socket, ciphertext, CIPHER_SIZE) < 1 ){
                 log_error("Error on receiving aof size --> %s", strerror(errno));
@@ -181,20 +183,23 @@ entropy_rcv_callback(void *arg1, void *arg2)
              }
         }
         else{
-           	if( read(peer_socket, &aofLength, sizeof(int32_t)) < 1 ){
+        	/* Step 1: Read the key/Value size */
+           	if( read(peer_socket, &keyValueLength, sizeof(int32_t)) < 1 ){
             	log_error("Error on receiving aof size --> %s", strerror(errno));
             	goto error;
             }
-        	aofLength = ntohl(aofLength);
-        	log_info("AOF Length: %d", aofLength);
+           	keyValueLength = ntohl(keyValueLength);
+        	log_info("AOF Length: %d", keyValueLength);
             memset(&aof[0], 0, sizeof(aof));
-           	if( read(peer_socket, &aof, aofLength) < 1 ){
+
+            /* Step 2: Read the key/Value using the keyValueLength */
+           	if( read(peer_socket, &aof, keyValueLength) < 1 ){
             	log_error("Error on receiving aof file --> %s", strerror(errno));
             	goto error;
             }
         }
        	loga("Key: %d/%d - Redis serialized form: \n%s", i+1,numberOfKeys,aof);
-       	redis_written_bytes = write(redis_socket, &aof, aofLength);
+       	redis_written_bytes = write(redis_socket, &aof, keyValueLength);
        	if( redis_written_bytes < 1 ){
         	log_error("Error on writing to Redis, bytes: %d --> %s", redis_written_bytes, strerror(errno));
         	goto error;

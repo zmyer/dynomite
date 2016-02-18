@@ -33,8 +33,9 @@
 
 #include "dyn_core.h"
 
-#define ENCRYPT_FLAG			0
-#define LOG_CHUNK_LEVEL			2000 // every how many chunks to log
+#define ENCRYPT_FLAG			1
+#define LOG_CHUNK_LEVEL			1000 // every how many chunks to log
+#define THROUGHPUT_THROTTLE		10000000
 #define AOF_TO_SEND		"/mnt/data/nfredis/appendonly.aof"	/* add in .yml */
 
 
@@ -127,26 +128,19 @@ header_send(struct stat file_stat, int peer_socket)
 }
 
 /*
- * Function:  entropy_send_stats
+ * Function:  entropy_snd_stats
  * --------------------
  *
  * Logging statistics about the transfer;
  *
  */
-static rstatus_t
-entropy_send_stats(int current_chunk, ssize_t bytes_in_window, int chunks_window, time_t start_time){
-	time_t elapsed_time = time(NULL) - start_time;
-	double chunk_thr = 0;
-	double byte_thr = 0;
+static void
+entropy_snd_stats(int current_chunk, time_t elapsed_time, double chunk_thr, double byte_thr){
 
-	if(elapsed_time > 0){
-        chunk_thr = (double)(chunks_window/elapsed_time);
-        byte_thr = (double)(bytes_in_window/elapsed_time)/1000000; //Divide by 1M for MB
+	if(elapsed_time > 0 && current_chunk > 0){
         loga("Transferring chunk %d (%.2f chunks/sec"
         		 "  -- %.2f MB/sec)", current_chunk, chunk_thr, byte_thr);
 	}
-
-	return DN_OK;
 }
 
 /*
@@ -168,10 +162,14 @@ entropy_snd_callback(void *arg1, void *arg2)
     char            data_buff[BUFFER_SIZE];
     unsigned char ciphertext[CIPHER_SIZE];
     int ciphertext_len = 0;
-    size_t 			nread;
+    size_t 			aof_bytes_read;
     int				nchunk;
     int 			i; //iterator for chunks
     size_t 			last_chunk_size;
+	double chunk_thr = 0;
+	double byte_thr = 0;
+	time_t elapsed_time;
+
     int n = *((int *)arg2);
 
     struct entropy *st = arg1;
@@ -187,7 +185,6 @@ entropy_snd_callback(void *arg1, void *arg2)
     else{
     	entropy_crypto_init();
     }
-
 
     /* accept the connection */
     peer_socket = accept(st->sd, NULL, NULL);
@@ -256,9 +253,17 @@ entropy_snd_callback(void *arg1, void *arg2)
 			(int)file_stat.st_size, BUFFER_SIZE, CIPHER_SIZE, ENCRYPT_FLAG);
 	loga("CHUNK INFO: number of chunks: %d -- last chunk size: %ld", nchunk, last_chunk_size);
 
-	time_t start_time = time(NULL);
-	int chunks_in_window = 0;
-	ssize_t bytes_in_window = 0;
+	time_t stats_start_time = time(NULL);
+	struct timeval now;
+	gettimeofday(&now, NULL);
+	time_t      throttle_start_sec = now.tv_sec;
+	suseconds_t throttle_start_usec = now.tv_usec;
+	suseconds_t throttle_elapsed_usec;
+	suseconds_t throttle_current_rate_usec;
+
+	int stat_chunks_in_window = 0;
+	ssize_t stat_bytes_in_window = 0;
+	ssize_t throttle_bytes = 0;
 
     for(i=0; i<nchunk; i++){
 
@@ -267,18 +272,39 @@ entropy_snd_callback(void *arg1, void *arg2)
 
         /* Read file data in chunks of BUFFER_SIZE bytes */
         if(i < nchunk-1){
-        	nread = fread (data_buff, sizeof(char), BUFFER_SIZE, fp);
+        	aof_bytes_read = fread (data_buff, sizeof(char), BUFFER_SIZE, fp);
         }
         else{
-        	nread = fread (data_buff, sizeof(char), last_chunk_size, fp);
+        	aof_bytes_read = fread (data_buff, sizeof(char), last_chunk_size, fp);
         }
 
         /* checking for errors */
-    	if (nread < 0){
+    	if (aof_bytes_read < 0){
     		 log_error("Error reading chunk of AOF file --> %s", strerror(errno));
          	 goto error;
     	}
-        /* transmit the chunk encrypted/unencrypted */
+
+
+    	/***** THROTTLER ******/
+
+    	/* Capture the current time, the elapsed time, and the bytes */
+    	gettimeofday(&now, NULL);
+    	throttle_elapsed_usec = (now.tv_sec-throttle_start_sec)*1000000 + now.tv_usec-throttle_start_usec;
+    	throttle_bytes += aof_bytes_read;
+
+    	/* Determine the expected throughput on the usec level */
+    	throttle_current_rate_usec = (suseconds_t) 1000000 * throttle_bytes/THROUGHPUT_THROTTLE;
+
+    	/* if the rate is higher than the expected, then wait for the corresponding time to throttle it */
+    	if (throttle_current_rate_usec  > throttle_elapsed_usec ){
+    		usleep(throttle_current_rate_usec - throttle_elapsed_usec);
+    		throttle_bytes = 0;
+    		throttle_start_sec = now.tv_sec;
+    		throttle_start_usec = now.tv_usec;
+    	}
+    	/******************/
+
+
         if(ENCRYPT_FLAG == 1){
         	if (i < nchunk-1){
                 ciphertext_len = entropy_encrypt (data_buff, BUFFER_SIZE, ciphertext);
@@ -312,14 +338,18 @@ entropy_snd_callback(void *arg1, void *arg2)
     	}
     	else{
     		data_trasmitted +=transmit_len;
-    		chunks_in_window++;
-    		bytes_in_window +=transmit_len;
-    		if(i % LOG_CHUNK_LEVEL == 0 || i == nchunk){
-    			if(entropy_send_stats(i, bytes_in_window, chunks_in_window, start_time) == DN_ERROR){
-    				log_error("Logging stats has a problem for chunk $d", i);
-    			}
-    			bytes_in_window = 0;
-    			chunks_in_window = 0;
+    		stat_chunks_in_window++;
+    		stat_bytes_in_window +=transmit_len;
+
+			elapsed_time = time(NULL) - stats_start_time;
+
+    		if (elapsed_time > 0 && (i % LOG_CHUNK_LEVEL == 0 || i == nchunk)){
+    	        chunk_thr = (double)(stat_chunks_in_window/elapsed_time);
+    	        byte_thr = (double)(stat_bytes_in_window/elapsed_time)/1000000; //Divide by 1M for MB
+    			entropy_snd_stats(i, elapsed_time, chunk_thr, byte_thr);
+    			stat_bytes_in_window = 0;
+    			stat_chunks_in_window = 0;
+    			stats_start_time = time(NULL);
     		}
     	}
     }
