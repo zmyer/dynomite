@@ -55,7 +55,6 @@ struct entropy *entropy_rcv_init(uint16_t entropy_port, char *entropy_ip, struct
 void entropy_conn_destroy(struct entropy *cn);
 
 int entropy_encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *ciphertext);
-
 int entropy_decrypt(unsigned char *plaintext, int plaintext_len, unsigned char *ciphertext);
 
 rstatus_t entropy_listen(struct entropy *cn);
