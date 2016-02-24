@@ -92,24 +92,11 @@ core_ctx_create(struct instance *nci)
 		return NULL;
 	}
 
-	/* SSL connection for sending data to Spark cluster for reconciliation */
-	ctx->snd_entropy = entropy_snd_init(nci->entropy_snd_port, nci->entropy_snd_addr, ctx);
-    if (ctx->snd_entropy == NULL) {
+	/* SSL connections for sending/receiving data for external reconciliation */
+    ctx->entropy = entropy_init(nci->entropy_port, nci->entropy_addr, ctx);
+    if (ctx->entropy == NULL) {
    	    loga("Failed to initialize SSL connection for reconciliation!!!");
 		crypto_deinit();
-		stats_destroy(ctx->stats);
-		server_pool_deinit(&ctx->pool);
-		conf_destroy(ctx->cf);
-    	dn_free(ctx);
-    	return NULL;
-    }
-
-	/* SSL connection for receiving data from Spark cluster for reconciliation */
-	ctx->rcv_entropy = entropy_rcv_init(nci->entropy_rcv_port, nci->entropy_rcv_addr, ctx);
-    if (ctx->rcv_entropy == NULL) {
-   	    loga("Failed to initialize SSL connection for reconciliation!!!");
-		crypto_deinit();
-		entropy_conn_destroy(ctx->snd_entropy);
 		stats_destroy(ctx->stats);
 		server_pool_deinit(&ctx->pool);
 		conf_destroy(ctx->cf);
@@ -123,8 +110,7 @@ core_ctx_create(struct instance *nci)
 		loga("Failed to create socket event handling!!!");
 		crypto_deinit();
 		stats_destroy(ctx->stats);
-		entropy_conn_destroy(ctx->snd_entropy);
-		entropy_conn_destroy(ctx->rcv_entropy);
+		entropy_conn_destroy(ctx->entropy);
 		server_pool_deinit(&ctx->pool);
 		conf_destroy(ctx->cf);
 		dn_free(ctx);
@@ -139,6 +125,7 @@ core_ctx_create(struct instance *nci)
 		server_pool_disconnect(ctx);
 		event_base_destroy(ctx->evb);
 		stats_destroy(ctx->stats);
+		entropy_conn_destroy(ctx->entropy);
 		server_pool_deinit(&ctx->pool);
 		conf_destroy(ctx->cf);
 		dn_free(ctx);
@@ -153,6 +140,7 @@ core_ctx_create(struct instance *nci)
 		server_pool_disconnect(ctx);
 		event_base_destroy(ctx->evb);
 		stats_destroy(ctx->stats);
+		entropy_conn_destroy(ctx->entropy);
 		server_pool_deinit(&ctx->pool);
 		conf_destroy(ctx->cf);
 		dn_free(ctx);
@@ -167,6 +155,7 @@ core_ctx_create(struct instance *nci)
 		server_pool_disconnect(ctx);
 		event_base_destroy(ctx->evb);
 		stats_destroy(ctx->stats);
+		entropy_conn_destroy(ctx->entropy);
 		server_pool_deinit(&ctx->pool);
 		conf_destroy(ctx->cf);
 		dn_free(ctx);
@@ -184,6 +173,7 @@ core_ctx_create(struct instance *nci)
 		server_pool_disconnect(ctx);
 		event_base_destroy(ctx->evb);
 		stats_destroy(ctx->stats);
+		entropy_conn_destroy(ctx->entropy);
 		server_pool_deinit(&ctx->pool);
 		conf_destroy(ctx->cf);
 		dn_free(ctx);
@@ -202,6 +192,7 @@ core_ctx_create(struct instance *nci)
 		server_pool_disconnect(ctx);
 		event_base_destroy(ctx->evb);
 		stats_destroy(ctx->stats);
+		entropy_conn_destroy(ctx->entropy);
 		server_pool_deinit(&ctx->pool);
 		conf_destroy(ctx->cf);
 		dn_free(ctx);
@@ -231,8 +222,7 @@ core_ctx_destroy(struct context *ctx)
 	server_pool_disconnect(ctx);
 	event_base_destroy(ctx->evb);
 	stats_destroy(ctx->stats);
-	entropy_conn_destroy(ctx->snd_entropy);
-	entropy_conn_destroy(ctx->rcv_entropy);
+	entropy_conn_destroy(ctx->entropy);
 	server_pool_deinit(&ctx->pool);
 	conf_destroy(ctx->cf);
 	dn_free(ctx);

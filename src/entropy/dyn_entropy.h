@@ -19,20 +19,14 @@
 
 #include "dyn_core.h"
 
-#define ENTROPY_SND_ADDR      "0.0.0.0"
-#define ENTROPY_SND_PORT      8105
+#define ENTROPY_ADDR      "127.0.0.1"
+#define ENTROPY_PORT      8105
 
-#define ENTROPY_RCV_ADDR      "0.0.0.0"
-#define ENTROPY_RCV_PORT	  8106
+#define ENCRYPT_FLAG			1
+#define DECRYPT_FLAG			0
 
 #define BUFFER_SIZE				16384				  // BUFFER_SIZE 256KB
 #define CIPHER_SIZE				BUFFER_SIZE + 1024    // CIPHER_SIZE must be larger than BUFFER_SIZE
-#define HEADER_SIZE				512  				  // HEADER_SIZE must be smaller than CIPHER_SIZE
-
-
-
-/* this indicates if the key and iv have been loaded */
-short keyIVLoaded;
 
 /* Structure for sending AOF to Spark Cluster */
 struct entropy {
@@ -48,15 +42,17 @@ struct entropy {
     struct string             recon_iv_file;		  /* file with Initialization Vector encryption in reconciliation */
 };
 
-
-struct entropy *entropy_snd_init(uint16_t entropy_port, char *entropy_ip, struct context *ctx);
-struct entropy *entropy_rcv_init(uint16_t entropy_port, char *entropy_ip, struct context *ctx);
-
+struct entropy *entropy_init(uint16_t entropy_port, char *entropy_ip, struct context *ctx);
+void *entropy_loop(void *arg);
+rstatus_t entropy_conn_start(struct entropy *cn);
 void entropy_conn_destroy(struct entropy *cn);
+rstatus_t entropy_listen(struct entropy *cn);
 
 int entropy_encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *ciphertext);
 int entropy_decrypt(unsigned char *plaintext, int plaintext_len, unsigned char *ciphertext);
-
-rstatus_t entropy_listen(struct entropy *cn);
 rstatus_t entropy_key_iv_load();
+
+rstatus_t entropy_snd_start(int peer_socket, int header_size, int buffer_size, int cipher_size);
+rstatus_t entropy_rcv_start(int peer_socket, int header_size, int buffer_size, int cipher_size);
+
 

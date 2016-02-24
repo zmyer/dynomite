@@ -169,9 +169,8 @@ typedef enum data_store {
 struct context {
     uint32_t           id;          	/* unique context id */
     struct conf        *cf;         	/* configuration */
-    struct stats       	   *stats;      	/* stats */
-    struct entropy     *snd_entropy;    /* send reconciliation connection */
-    struct entropy     *rcv_entropy;    /* receive reconciliation connection */
+    struct stats       *stats;          /* stats */
+    struct entropy     *entropy;    	/* send reconciliation connection */
     struct array       pool;        	/* server_pool[] */
     struct event_base  *evb;        	/* event base */
     int                max_timeout; 	/* max timeout in msec */
@@ -192,10 +191,8 @@ struct instance {
     int             stats_interval;              /* stats aggregation interval */
     char            *stats_addr;                 /* stats monitoring addr */
     char            hostname[DN_MAXHOSTNAMELEN]; /* hostname */
-    uint16_t        entropy_snd_port;                  /* send reconciliation port */
-    char            *entropy_snd_addr;                 /* send reconciliation addr */
-    uint16_t        entropy_rcv_port;                  /* receive reconciliation port */
-    char            *entropy_rcv_addr;                 /* receive reconciliation addr */
+    uint16_t        entropy_port;                  /* send reconciliation port */
+    char            *entropy_addr;                 /* send reconciliation addr */
     size_t          mbuf_chunk_size;             /* mbuf chunk size */
     size_t			alloc_msgs_max;			     /* allocated messages buffer size */
     pid_t           pid;                         /* process id */

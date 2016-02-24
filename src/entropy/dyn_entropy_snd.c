@@ -33,7 +33,6 @@
 
 #include "dyn_core.h"
 
-#define ENCRYPT_FLAG			1
 #define LOG_CHUNK_LEVEL			1000 // every how many chunks to log
 #define THROUGHPUT_THROTTLE		10000000
 #define AOF_TO_SEND		"/mnt/data/nfredis/appendonly.aof"	/* add in .yml */
@@ -49,8 +48,8 @@
  */
 
 static rstatus_t
-entropy_redis_compact_aof(){
-	char 			command[BUFFER_SIZE];
+entropy_redis_compact_aof(int buffer_size){
+	char 			command[buffer_size];
     int 			sys_ret = 0;
 
 	memset(&command[0], 0, sizeof(command));
@@ -79,13 +78,13 @@ entropy_redis_compact_aof(){
  * --------------------
  *
  * Sending summary information in a header;
- * Header Format: file size | buffer size | cipher size | encryption | data store
+ * Header Format: file size | encryption | data store
  *
  */
 static rstatus_t
-header_send(struct stat file_stat, int peer_socket)
+header_send(struct stat file_stat, int peer_socket, int header_size)
 {
-    char			header_buff[HEADER_SIZE];
+    char			header_buff[header_size];
     ssize_t         transmit_len;
 
     memset(&header_buff[0], 0, sizeof(header_buff));
@@ -94,21 +93,11 @@ header_send(struct stat file_stat, int peer_socket)
     header_buff[2] = (int)((((int)file_stat.st_size) >> 8) & 0XFF);
     header_buff[3] = (int)((((int)file_stat.st_size) & 0XFF));
 
-    header_buff[4] = (int)((BUFFER_SIZE >> 24) & 0xFF);
-    header_buff[5] = (int)((BUFFER_SIZE >> 16) & 0xFF);
-    header_buff[6] = (int)((BUFFER_SIZE >> 8) & 0XFF);
-    header_buff[7] = (int)((BUFFER_SIZE & 0XFF));
-
-    header_buff[8] = (int)((CIPHER_SIZE >> 24) & 0xFF);
-    header_buff[9] = (int)((CIPHER_SIZE >> 16) & 0xFF);
-    header_buff[10] = (int)((CIPHER_SIZE >> 8) & 0XFF);
-    header_buff[11] = (int)((CIPHER_SIZE & 0XFF));
-
     // TODO: encrypt flag does not have to be int but a single byte.
-    header_buff[12] = (int)((ENCRYPT_FLAG >> 24) & 0xFF);
-    header_buff[13] = (int)((ENCRYPT_FLAG >> 16) & 0xFF);
-    header_buff[14] = (int)((ENCRYPT_FLAG >> 8) & 0XFF);
-    header_buff[15] = (int)((ENCRYPT_FLAG & 0XFF));
+    header_buff[4] = (int)((ENCRYPT_FLAG >> 24) & 0xFF);
+    header_buff[5] = (int)((ENCRYPT_FLAG >> 16) & 0xFF);
+    header_buff[6] = (int)((ENCRYPT_FLAG >> 8) & 0XFF);
+    header_buff[7] = (int)((ENCRYPT_FLAG & 0XFF));
 
     //TODO: we can add data store information as well
 
@@ -118,11 +107,7 @@ header_send(struct stat file_stat, int peer_socket)
   	    log_error("Error on sending AOF file size --> %s", strerror(errno));
       	return DN_ERROR;
     }
-  	else if (transmit_len > CIPHER_SIZE){
-  		log_error("Header Transmit Length is longer than CIPHER SIZE --> "
-  				"transmit: %d cipher size: %d", transmit_len, CIPHER_SIZE);
-      	return DN_ERROR;
-  	}
+
   	loga("The size of header is %d",sizeof(header_buff)); //TODO: this can be moved to log_info
   	return DN_OK;
 }
@@ -144,23 +129,21 @@ entropy_snd_stats(int current_chunk, time_t elapsed_time, double chunk_thr, doub
 }
 
 /*
- * Function:  entropy_snd_callback
+ * Function:  entropy_snd_start
  * --------------------
  *
- * Handling connection for each client on a separate thread
+ * Processes the AOF and transmits to the entropy engine
  */
+rstatus_t
+entropy_snd_start(int peer_socket, int header_size, int buffer_size, int cipher_size){
 
-static void
-entropy_snd_callback(void *arg1, void *arg2)
-{
     struct stat     file_stat;
     ssize_t         transmit_len;
     ssize_t			data_trasmitted = 0;
-    int peer_socket;
     FILE			*fp = NULL;
     int             fd;
-    char            data_buff[BUFFER_SIZE];
-    unsigned char ciphertext[CIPHER_SIZE];
+    char            data_buff[buffer_size];
+    unsigned char ciphertext[cipher_size];
     int ciphertext_len = 0;
     size_t 			aof_bytes_read;
     int				nchunk;
@@ -170,32 +153,8 @@ entropy_snd_callback(void *arg1, void *arg2)
 	double byte_thr = 0;
 	time_t elapsed_time;
 
-    int n = *((int *)arg2);
-
-    struct entropy *st = arg1;
-
-    /* check for issues */
-    if (n == 0 || CIPHER_SIZE < BUFFER_SIZE) {
-   	    return;
-    }
-
-    if(ENCRYPT_FLAG == 0){
-    	loga("WARNING: Encryption is disabled for reconciliation");
-    }
-    else{
-    	entropy_crypto_init();
-    }
-
-    /* accept the connection */
-    peer_socket = accept(st->sd, NULL, NULL);
-    if(peer_socket < 0){
-    	log_error("peer socket could not be established");
-    	goto error;
-    }
-    loga("Spark socket connection accepted"); //TODO: print information about the socket IP address.
-
     /* compact AOF in Redis before sending to Spark */
-    if(entropy_redis_compact_aof() == DN_ERROR){
+    if(entropy_redis_compact_aof(buffer_size) == DN_ERROR){
     	log_error("Redis failed to perform bgrewriteaof");
     	goto error;
     }
@@ -229,7 +188,7 @@ entropy_snd_callback(void *arg1, void *arg2)
 
 
     /* sending header */
-    if(header_send(file_stat, peer_socket)==DN_ERROR){
+    if(header_send(file_stat, peer_socket, header_size)==DN_ERROR){
     	goto error;
     }
 
@@ -237,8 +196,8 @@ entropy_snd_callback(void *arg1, void *arg2)
 	 * if the size of the file is larger than the Buffer size
 	 * then split it, otherwise we need one chunk only.
 	 *  */
-	if(file_stat.st_size > BUFFER_SIZE){
-		nchunk = (int)(ceil(file_stat.st_size/BUFFER_SIZE) + 1);
+	if(file_stat.st_size > buffer_size){
+		nchunk = (int)(ceil(file_stat.st_size/buffer_size) + 1);
 	}
 	else{
 		nchunk = 1;
@@ -247,10 +206,10 @@ entropy_snd_callback(void *arg1, void *arg2)
     /* Last chunk size is calculated by subtracting from the total file size
      * the size of each chunk excluding the last one.
      */
-   	last_chunk_size = (long)(file_stat.st_size - (nchunk-1) * BUFFER_SIZE);
+   	last_chunk_size = (long)(file_stat.st_size - (nchunk-1) * buffer_size);
 
 	loga("HEADER INFO: file size: %d -- buffer size: %d -- cipher size: %d -- encryption: %d ",
-			(int)file_stat.st_size, BUFFER_SIZE, CIPHER_SIZE, ENCRYPT_FLAG);
+			(int)file_stat.st_size, buffer_size, cipher_size, ENCRYPT_FLAG);
 	loga("CHUNK INFO: number of chunks: %d -- last chunk size: %ld", nchunk, last_chunk_size);
 
 	time_t stats_start_time = time(NULL);
@@ -270,9 +229,9 @@ entropy_snd_callback(void *arg1, void *arg2)
         /* clear buffer before using it */
         memset(data_buff, 0, sizeof(data_buff));
 
-        /* Read file data in chunks of BUFFER_SIZE bytes */
+        /* Read file data in chunks of buffer_size bytes */
         if(i < nchunk-1){
-        	aof_bytes_read = fread (data_buff, sizeof(char), BUFFER_SIZE, fp);
+        	aof_bytes_read = fread (data_buff, sizeof(char), buffer_size, fp);
         }
         else{
         	aof_bytes_read = fread (data_buff, sizeof(char), last_chunk_size, fp);
@@ -283,7 +242,6 @@ entropy_snd_callback(void *arg1, void *arg2)
     		 log_error("Error reading chunk of AOF file --> %s", strerror(errno));
          	 goto error;
     	}
-
 
     	/***** THROTTLER ******/
 
@@ -304,10 +262,9 @@ entropy_snd_callback(void *arg1, void *arg2)
     	}
     	/******************/
 
-
         if(ENCRYPT_FLAG == 1){
         	if (i < nchunk-1){
-                ciphertext_len = entropy_encrypt (data_buff, BUFFER_SIZE, ciphertext);
+                ciphertext_len = entropy_encrypt (data_buff, buffer_size, ciphertext);
         	}
         	else{
                 ciphertext_len = entropy_encrypt (data_buff, last_chunk_size, ciphertext);
@@ -321,7 +278,7 @@ entropy_snd_callback(void *arg1, void *arg2)
         }
         else{
         	if(i<nchunk-1){
-        		transmit_len = send(peer_socket, data_buff, BUFFER_SIZE, 0);
+        		transmit_len = send(peer_socket, data_buff, buffer_size, 0);
         	}
         	else{
         		transmit_len = send(peer_socket, data_buff, last_chunk_size, 0);
@@ -355,113 +312,18 @@ entropy_snd_callback(void *arg1, void *arg2)
     }
 
     loga("Chunks transferred: %d ---> AOF transfer completed!", i);
-
-	/* clean up */
-	if(ENCRYPT_FLAG == 1)
-		entropy_crypto_deinit();
-
 	if(fp!=NULL)
 		fclose(fp);
-
-	close(peer_socket);
-    loga("Sender entropy resource cleaning complete");
-
-    return;
-
-error:
-	/* clean up resources after error */
-	if(ENCRYPT_FLAG == 1)
-		entropy_crypto_deinit();
-
-	if(fp!=NULL)
-		fclose(fp);
-
-	close(peer_socket);
-	log_error("Closing sender entropy socket (check for above for possible errors).");
-    return;
-
-}
-
-static void *
-entropy_loop(void *arg)
-{
-    event_loop_entropy(entropy_snd_callback, arg);
-    return NULL;
-}
-
-
-/*
- * Function: (static) entropy_conn_start
- * --------------------
- * Checks if resources are available, and initializes the connection information.
- * Loads the IV and creates a new thread to loop for the entropy receive.
- *
- *  returns: r_status for the status of opening of the new connection.
- */
-
-static rstatus_t
-entropy_conn_start(struct entropy *cn)
-{
-    rstatus_t status;
-
-    THROW_STATUS(entropy_listen(cn));
-
-    status = pthread_create(&cn->tid, NULL, entropy_loop, cn);
-    if (status < 0) {
-        log_error("reconciliation thread for socket create failed: %s", strerror(status));
-        return DN_ERROR;
-    }
 
     return DN_OK;
-}
-
-
-/*
- * Function:  entropy_snd_init
- * --------------------
- * Initiates the data for the connection towards another cluster for reconciliation
- *
- *  returns: a entropy_conn structure with information about the connection
- *           or NULL if a new thread cannot be picked up.
- */
-
-struct entropy *entropy_snd_init(uint16_t entropy_port, char *entropy_ip, struct context *ctx)
-{
-
-    rstatus_t status;
-    struct entropy *cn;
-
-    cn = dn_alloc(sizeof(*cn));
-    if (cn == NULL) {
-        log_error("Cannot allocate snd entropy structure");
-        goto error;
-    }
-
-    /* Loading of key/iv happens only once by calling entropy_key_iv_load which is a util function.
-     * The same key/iv are reused in the entropy_rcv_init as well.
-     */
-    if(entropy_key_iv_load(ctx) == DN_ERROR){										//TODO: we do not need to do that if encryption flag is not set.
-    	log_error("recon_key.pem or recon_iv.pem cannot be loaded properly");
-        goto error;
-    }
-    keyIVLoaded = 1;
-
-    cn->port = entropy_port;
-    string_set_raw(&cn->addr, entropy_ip);
-
-    cn->entropy_ts = (int64_t)time(NULL);
-    cn->tid = (pthread_t) -1; //Initialize thread id to -1
-    cn->sd = -1; // Initialize socket descriptor to -1
-
-    status = entropy_conn_start(cn);
-    if (status != DN_OK) {
-       goto error;
-    }
-
-    cn->ctx = ctx;
-    return cn;
 
 error:
-    entropy_conn_destroy(cn);
-    return NULL;
+
+	if(fp!=NULL)
+		fclose(fp);
+
+    return DN_ERROR;
+
 }
+
+

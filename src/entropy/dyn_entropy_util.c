@@ -1,6 +1,6 @@
 /*
  * Dynomite - A thin, distributed replication layer for multi non-distributed storages.
- * Copyright (C) 2015 Netflix, Inc.
+ * Copyright (C) 2016 Netflix, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,6 +33,10 @@
 
 #include "dyn_core.h"
 
+/* Define max values so that Dynomite operates under limits */
+#define MAX_HEADER_SIZE 1024
+#define MAX_BUFFER_SIZE 5120000 //5MB
+#define MAX_CIPHER_SIZE 5120000	//5MB
 
 /* A 128 bit key  */
 static unsigned char *theKey = (unsigned char *)"0123456789012345";
@@ -142,7 +146,7 @@ int entropy_encrypt(unsigned char *plaintext, int plaintext_len, unsigned char *
 	  return DN_ERROR;
 
   /* Padding */
-  if(1 != EVP_CIPHER_CTX_set_padding(ctx,1))
+  if(1 != EVP_CIPHER_CTX_set_padding(ctx,0))
 	  return DN_ERROR;
 
   /* Initialize the encryption operation with 256 bit AES */
@@ -217,31 +221,31 @@ entropy_listen(struct entropy *cn)
 
     cn->sd = socket(si.family, SOCK_STREAM, 0);
     if (cn->sd < 0) {
-        log_error("reconciliation socket failed: %s", strerror(errno));
+        log_error("anti-entropy socket failed: %s", strerror(errno));
         return DN_ERROR;
     }
 
     status = dn_set_reuseaddr(cn->sd);
     if (status < 0) {
-        log_error("reconciliation set reuseaddr on m %d failed: %s", cn->sd, strerror(errno));
+        log_error("anti-entropy set reuseaddr on m %d failed: %s", cn->sd, strerror(errno));
         return DN_ERROR;
     }
 
     status = bind(cn->sd, (struct sockaddr *)&si.addr, si.addrlen);
     if (status < 0) {
-        log_error(" reconciliation bind on m %d to addr '%.*s:%u' failed: %s", cn->sd,
+        log_error(" anti-entropy bind on m %d to addr '%.*s:%u' failed: %s", cn->sd,
                   cn->addr.len, cn->addr.data, cn->port, strerror(errno));
         return DN_ERROR;
     }
 
     status = listen(cn->sd, SOMAXCONN);
     if (status < 0) {
-        log_error("reconciliation listen on m %d failed: %s", cn->sd, strerror(errno));
+        log_error("anti-entropy listen on m %d failed: %s", cn->sd, strerror(errno));
         return DN_ERROR;
     }
 
 
-    log_debug(LOG_NOTICE, "reconciliation m %d listening on '%.*s:%u'", cn->sd,
+    log_debug(LOG_NOTICE, "anti-entropy m %d listening on '%.*s:%u'", cn->sd,
     		cn->addr.len, cn->addr.data, cn->port);
 
     return DN_OK;
@@ -340,6 +344,235 @@ entropy_key_iv_load(struct context *ctx){
     }
    // theIv = (unsigned char *)buff;
     loga("iv loaded: %s", theIv);
+
+    return DN_OK;
+}
+
+
+/*
+ * Function:  entropy_snd_init
+ * --------------------
+ * Initiates the data for the connection towards another cluster for reconciliation
+ *
+ *  returns: a entropy_conn structure with information about the connection
+ *           or NULL if a new thread cannot be picked up.
+ */
+
+struct entropy *entropy_init(uint16_t entropy_port, char *entropy_ip, struct context *ctx)
+{
+
+    rstatus_t status;
+    struct entropy *cn;
+
+    cn = dn_alloc(sizeof(*cn));
+    if (cn == NULL) {
+        log_error("Cannot allocate snd entropy structure");
+        goto error;
+    }
+
+    /* Loading of key/iv happens only once by calling entropy_key_iv_load which is a util function.
+     * The same key/iv are reused in the entropy_rcv_init as well.
+     */
+    if(entropy_key_iv_load(ctx) == DN_ERROR){										//TODO: we do not need to do that if encryption flag is not set.
+    	log_error("recon_key.pem or recon_iv.pem cannot be loaded properly");
+        goto error;
+    }
+
+    cn->port = entropy_port;
+    string_set_raw(&cn->addr, entropy_ip);
+
+    cn->entropy_ts = (int64_t)time(NULL);
+    cn->tid = (pthread_t) -1; //Initialize thread id to -1
+    cn->sd = -1; // Initialize socket descriptor to -1
+    cn->redis_sd = -1;			// Initialize redis socket descriptor to -1
+
+    status = entropy_conn_start(cn);
+    if (status != DN_OK) {
+       goto error;
+    }
+
+    cn->ctx = ctx;
+    return cn;
+
+error:
+    entropy_conn_destroy(cn);
+    return NULL;
+}
+
+/*
+ * Function:  entropy_callback
+ * --------------------
+ *
+ * Handling connection on a separate thread.
+ * The entropy_callback is used to accept the connection,
+ * process the header from the entropy header and perform
+ * an action (send the snapshot or receive data from the
+ * entropy engine).
+ */
+
+static void
+entropy_callback(void *arg1, void *arg2)
+{
+
+    int n = *((int *)arg2);
+    struct entropy *st = arg1;
+
+    if (n == 0) {
+   	    return;
+    }
+
+    /* Check the encryption flag and initialize the crypto */
+    if(ENCRYPT_FLAG == 1 || DECRYPT_FLAG == 1) {
+    	entropy_crypto_init();
+    }
+    else if (ENCRYPT_FLAG == 0) {
+    	loga("Encryption is disabled for entropy sender");
+
+    }
+    else if (DECRYPT_FLAG == 0) {
+    	loga("Decryption is disabled for entropy receiver");
+    }
+
+    /* accept the connection */
+    int peer_socket = accept(st->sd, NULL, NULL);
+    if(peer_socket < 0){
+    	log_error("peer socket could not be established");
+    	goto error;
+    }
+    loga("Spark socket connection accepted"); //TODO: print information about the socket IP address.
+
+    /* Read header from Lepton */
+    int32_t sndOrRcv = 0;
+    if( read(peer_socket, &sndOrRcv, sizeof(int32_t)) < 1) {
+        log_error("Error on processing header from Lepton --> %s", strerror(errno));
+    	goto error;
+    }
+    sndOrRcv = ntohl(sndOrRcv);
+
+    int32_t headerSize;
+    if( read(peer_socket, &headerSize, sizeof(int32_t)) < 1) {
+        log_error("Error on processing header size from Lepton --> %s", strerror(errno));
+    	goto error;
+    }
+    headerSize = ntohl(headerSize);
+
+    int32_t bufferSize;
+    if( read(peer_socket, &bufferSize, sizeof(int32_t)) < 1) {
+        log_error("Error on processing buffer size from Lepton --> %s", strerror(errno));
+    	goto error;
+    }
+    bufferSize = ntohl(bufferSize);
+
+    int32_t cipherSize;
+    if( read(peer_socket, &cipherSize, sizeof(int32_t)) < 1) {
+        log_error("Error on processing cipher size from Lepton --> %s", strerror(errno));
+       	goto error;
+    }
+    cipherSize = ntohl(cipherSize);
+
+
+    if (sndOrRcv != 1 && sndOrRcv !=2) {
+    	log_error("Error on receiving PULL/PUSH --> %s ----> %d", strerror(errno),sndOrRcv);
+    	goto error;
+    }
+
+    if (headerSize < 1 || headerSize > MAX_HEADER_SIZE){
+    	log_error("Header size was not received --> %d", headerSize);
+    	goto error;
+    }
+
+    if (bufferSize < 1 || bufferSize > MAX_BUFFER_SIZE){
+    	log_error("Buffer size was not received --> %d", bufferSize);
+    	goto error;
+    }
+
+    if (cipherSize < 1 || cipherSize > MAX_CIPHER_SIZE){
+    	log_error("Cipher size was not received --> %d", cipherSize);
+    	goto error;
+    }
+
+
+    loga("Header size: %d Buffer size: %d Cipher size: %d", headerSize, bufferSize, cipherSize);
+
+    if (cipherSize <= bufferSize){
+    	log_error("AES encryption does not allow cipher size to be smaller than buffer size "
+    			"-- Cipher size: %d buffer size %d", cipherSize, bufferSize);
+    	goto error;
+    }
+    if (sndOrRcv == 1) {
+    	loga("PULL: Dynomite to send data to entropy engine");
+    	if (entropy_snd_start(peer_socket, headerSize, bufferSize, cipherSize) == DN_ERROR){
+    		log_error("Entropy send faced issue ---> cleaning resources");
+    		goto error;
+    	}
+    	else{
+    		loga("Entropy receive completed ---> cleaning resources");
+    	}
+
+    }
+    else if (sndOrRcv == 2) {
+    	loga("PUSH: Dynomite to receive data from entropy engine");
+    	if (entropy_rcv_start(peer_socket, headerSize, bufferSize, cipherSize) == DN_ERROR){
+    		log_error("Entropy receive faced issue ---> cleaning resources");
+    		goto error;
+    	}
+    	else{
+    		loga("Entropy send completed ---> cleaning resources");
+    	}
+    }
+
+
+
+    if(ENCRYPT_FLAG == 1 || DECRYPT_FLAG == 1)
+		entropy_crypto_deinit();
+
+    if(peer_socket > -1)
+    	close(peer_socket);
+
+    return;
+
+/* resource cleanup */
+error:
+
+	if(ENCRYPT_FLAG == 1 || DECRYPT_FLAG == 1)
+		entropy_crypto_deinit();
+
+    if(peer_socket > -1)
+    	close(peer_socket);
+
+	return;
+
+}
+
+void *
+entropy_loop(void *arg)
+{
+    event_loop_entropy(entropy_callback, arg);
+	return NULL;
+}
+
+
+/*
+ * Function: entropy_conn_start
+ * --------------------
+ * Checks if resources are available, and initializes the connection information.
+ * Loads the IV and creates a new thread to loop for the entropy receive.
+ *
+ *  returns: rstatus_t for the status of opening of the new connection.
+ */
+
+rstatus_t
+entropy_conn_start(struct entropy *cn)
+{
+    rstatus_t status;
+
+    THROW_STATUS(entropy_listen(cn));
+
+    status = pthread_create(&cn->tid, NULL, entropy_loop, cn);
+    if (status < 0) {
+        log_error("reconciliation thread for socket create failed: %s", strerror(status));
+        return DN_ERROR;
+    }
 
     return DN_OK;
 }
