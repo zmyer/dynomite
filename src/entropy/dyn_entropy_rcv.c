@@ -34,7 +34,6 @@
 
 #include "dyn_core.h"
 
-#define DECRYPT_FLAG			0
 
 
 /*
@@ -69,20 +68,19 @@ entropy_redis_connector(){
 }
 
 /*
- * Function:  entropy_rcv_callback
+ * Function:  entropy_rcv_start
  * --------------------
  *
- * Handling connection for each client on a separate thread
+ * Receives the keys from the entropy engine
+ * and pushes them to Redis.
  */
+rstatus_t
+entropy_rcv_start(int peer_socket, int header_size, int buffer_size, int cipher_size){
 
-static void
-entropy_rcv_callback(void *arg1, void *arg2)
-{
-    int 			peer_socket;
     int 			redis_socket = 0;
-    char 			aof[BUFFER_SIZE];
-    char            buff[BUFFER_SIZE];
-    unsigned char ciphertext[CIPHER_SIZE];
+    char 			aof[buffer_size];
+    char            buff[buffer_size];
+    unsigned char ciphertext[cipher_size];
     int32_t 		keyValueLength;
     int32_t			tempInt;
     int 			i = 0;
@@ -90,12 +88,6 @@ entropy_rcv_callback(void *arg1, void *arg2)
 	int redis_written_bytes = 0;
 
 
-    int n = *((int *)arg2);
-    struct entropy *st = arg1;
-
-    if (n == 0) {
-   	    return;
-    }
 
     /* Check the encryption flag and initialize the crypto */
     if(DECRYPT_FLAG == 1){
@@ -105,23 +97,15 @@ entropy_rcv_callback(void *arg1, void *arg2)
     	loga("Encryption is disabled for entropy receiver");
     }
 
-    /* Open the peer socket */
-    peer_socket = accept(st->sd, NULL, NULL);
-    if(peer_socket < 0){
-    	log_error("peer socket could not be established");
-    	goto error;
-    }
-    loga("Spark downloader socket connection accepted"); //TODO: print information about the socket IP address.
-
     /* Processing header for number of Keys */
     if(DECRYPT_FLAG == 1) {
-    	int bytesRead = read(peer_socket, ciphertext, CIPHER_SIZE);
+    	int bytesRead = read(peer_socket, ciphertext, cipher_size);
     	if( bytesRead < 1 ){
     	    log_error("Error on receiving number of keys --> %s", strerror(errno));
     	    goto error;
     	}
     	loga("Bytes read %d", bytesRead);
-    	if( entropy_decrypt (ciphertext, BUFFER_SIZE, buff) < 0 )
+    	if( entropy_decrypt (ciphertext, buffer_size, buff) < 0 )
     	{
         	log_error("Error decrypting the AOF file size");
          	goto error;
@@ -160,11 +144,11 @@ entropy_rcv_callback(void *arg1, void *arg2)
     	 * and then decrypt the key/OldValue/newValue in Redis serialized format.
     	 */
         if(DECRYPT_FLAG == 1) {
-        	if( read(peer_socket, ciphertext, CIPHER_SIZE) < 1 ){
+        	if( read(peer_socket, ciphertext, cipher_size) < 1 ){
         	   log_error("Error on receiving aof size --> %s", strerror(errno));
         	   goto error;
         	}
-           	if( entropy_decrypt (ciphertext, BUFFER_SIZE, buff) < 0 )
+           	if( entropy_decrypt (ciphertext, buffer_size, buff) < 0 )
             {
                 log_error("Error decrypting the buffer for AOF file size");
                 goto error;
@@ -172,11 +156,11 @@ entropy_rcv_callback(void *arg1, void *arg2)
            	keyValueLength = ntohl(buff);
         	log_info("AOF Length: %d", keyValueLength);
             memset(&aof[0], 0, sizeof(aof));
-            if( read(peer_socket, ciphertext, CIPHER_SIZE) < 1 ){
+            if( read(peer_socket, ciphertext, cipher_size) < 1 ){
                 log_error("Error on receiving aof size --> %s", strerror(errno));
                 goto error;
             }
-            if( entropy_decrypt (ciphertext, BUFFER_SIZE, aof) < 0 )		//TODO: I am not sure the BUFFER_SIZE is correct here.
+            if( entropy_decrypt (ciphertext, buffer_size, aof) < 0 )		//TODO: I am not sure the buffer_size is correct here.
             {
                 log_error("Error decrypting the buffer for key/oldValue/newValue");
                 goto error;
@@ -207,107 +191,18 @@ entropy_rcv_callback(void *arg1, void *arg2)
        	loga("Bytes written to Redis %d", redis_written_bytes);
     }
 
-	/* Clean up */
-    if(DECRYPT_FLAG == 1)
-    	entropy_crypto_deinit();
-
-	close(peer_socket);
-	close(redis_socket);
-	loga("entropy rcv closing socket gracefully.");
-  	return;
-
-error:
-	/* Clean resources after error */
-	if(DECRYPT_FLAG == 1)
-		entropy_crypto_deinit();
-
-	close(peer_socket);
   	if(redis_socket > -1)
   		close(redis_socket);
 
-  	log_error("entropy rcv closing socket because of error.");
-  	return;
-
-
-}
-
-
-static void *
-entropy_loop(void *arg)
-{
-    event_loop_entropy(entropy_rcv_callback, arg);
-	return NULL;
-}
-
-
-/*
- * Function: (static) entropy_conn_start
- * --------------------
- * Checks if resources are available, and initializes the connection information.
- * Loads the IV and creates a new thread to loop for the entropy receive.
- *
- *  returns: rstatus_t for the status of opening of the new connection.
- */
-
-static rstatus_t
-entropy_conn_start(struct entropy *cn)
-{
-    rstatus_t status;
-
-    THROW_STATUS(entropy_listen(cn));
-
-    status = pthread_create(&cn->tid, NULL, entropy_loop, cn);
-    if (status < 0) {
-        log_error("reconciliation thread for socket create failed: %s", strerror(status));
-        return DN_ERROR;
-    }
-
-    return DN_OK;
-}
-
-
-/*
- * Function:  entropy_rcv_init
- * --------------------
- * Initiates the data for the connection towards another cluster for reconciliation
- *
- *  returns: a entropy_conn structure with information about the connection
- *           or NULL if a new thread cannot be picked up.
- */
-
-struct entropy *entropy_rcv_init(uint16_t entropy_port, char *entropy_ip, struct context *ctx)
-{
-
-    rstatus_t status;
-    struct entropy *cn;
-
-    cn = dn_alloc(sizeof(*cn));
-    if (cn == NULL) {
-       log_error("Cannot allocate rcv entropy structure");
-       goto error;
-    }
-    else if(keyIVLoaded == 0){
-       log_error("Key or IV have not been loaded during the entropy sender initialization");
-       goto error;
-    }
-
-    cn->port = entropy_port;
-    string_set_raw(&cn->addr, entropy_ip);
-
-    cn->entropy_ts = (int64_t)time(NULL);
-    cn->tid = (pthread_t) -1; 	//Initialize thread id to -1
-    cn->sd = -1; 				// Initialize socket descriptor to -1
-    cn->redis_sd = -1;			// Initialize redis socket descriptor to -1
-
-    status = entropy_conn_start(cn);
-    if (status != DN_OK) {
-       goto error;
-    }
-
-    cn->ctx = ctx;
-    return cn;
+  	return DN_OK;
 
 error:
-    entropy_conn_destroy(cn);
-    return NULL;
+
+  	if(redis_socket > -1){
+  		close(redis_socket);
+  		log_error("entropy rcv closing redis socket because of error.");
+  	}
+
+  	return DN_ERROR;
 }
+

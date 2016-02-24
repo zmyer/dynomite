@@ -46,10 +46,8 @@
 #define DN_STATS_ADDR       STATS_ADDR
 #define DN_STATS_INTERVAL   STATS_INTERVAL
 
-#define DN_ENTROPY_SND_PORT		ENTROPY_SND_PORT
-#define DN_ENTROPY_SND_ADDR		ENTROPY_SND_ADDR
-#define DN_ENTROPY_RCV_PORT		ENTROPY_RCV_PORT
-#define DN_ENTROPY_RCV_ADDR		ENTROPY_RCV_ADDR
+#define DN_ENTROPY_PORT		ENTROPY_PORT
+#define DN_ENTROPY_ADDR		ENTROPY_ADDR
 
 #define DN_PID_FILE         NULL
 
@@ -317,10 +315,8 @@ dn_set_default_options(struct instance *nci)
     nci->stats_addr = DN_STATS_ADDR;
     nci->stats_interval = DN_STATS_INTERVAL;
 
-    nci->entropy_snd_port = DN_ENTROPY_SND_PORT;
-    nci->entropy_snd_addr = DN_ENTROPY_SND_ADDR;
-    nci->entropy_rcv_port = DN_ENTROPY_RCV_PORT;
-    nci->entropy_rcv_addr = DN_ENTROPY_RCV_ADDR;
+    nci->entropy_port = DN_ENTROPY_PORT;
+    nci->entropy_addr = DN_ENTROPY_ADDR;
 
     status = dn_gethostname(nci->hostname, DN_MAXHOSTNAMELEN);
     if (status < 0) {
