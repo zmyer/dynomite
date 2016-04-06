@@ -1344,6 +1344,16 @@ req_server_dequeue_omsgq(struct context *ctx, struct conn *conn, struct msg *msg
     stats_server_decr_by(ctx, conn->owner, out_queue_bytes, msg->mlen);
 }
 
+static rstatus_t
+server_msg_recv(struct context *ctx, struct conn *conn)
+{
+    log_notice("Before receiving: inqueue:%u outqueue:%u", conn->imsg_count, conn->omsg_count);
+    uint32_t prev = conn->omsg_count;
+    rstatus_t s = msg_recv(ctx, conn);
+    log_notice("After receiving: inqueue:%u outqueue:%u, read %u responses",
+               conn->imsg_count, conn->omsg_count, conn->omsg_count - prev);
+    return s;
+}
 struct conn_ops server_ops = {
     msg_recv,
     rsp_recv_next,
