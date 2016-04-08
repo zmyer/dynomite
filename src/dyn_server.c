@@ -1351,11 +1351,11 @@ server_msg_recv(struct context *ctx, struct conn *conn)
     uint32_t prev = conn->omsg_count;
     rstatus_t s = msg_recv(ctx, conn);
     log_notice("After receiving: inqueue:%u outqueue:%u, read %u responses",
-               conn->imsg_count, conn->omsg_count, conn->omsg_count - prev);
+               conn->imsg_count, conn->omsg_count, prev - conn->omsg_count);
     return s;
 }
 struct conn_ops server_ops = {
-    msg_recv,
+    server_msg_recv,
     rsp_recv_next,
     rsp_recv_done,
     msg_send,
