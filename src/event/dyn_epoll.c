@@ -92,6 +92,7 @@ event_base_destroy(struct event_base *evb)
     dn_free(evb);
 }
 
+/* UNUSED
 int
 event_add_in(struct event_base *evb, struct conn *c)
 {
@@ -126,6 +127,7 @@ event_del_in(struct event_base *evb, struct conn *c)
 {
     return 0;
 }
+*/
 
 int
 event_add_out(struct event_base *evb, struct conn *c)
@@ -174,7 +176,7 @@ event_del_out(struct event_base *evb, struct conn *c)
         return 0;
     }
 
-    event.events = (uint32_t)(EPOLLIN | EPOLLET);
+    event.events = (uint32_t)(EPOLLIN);// | EPOLLET);
     event.data.ptr = c;
 
     log_debug(LOG_DEBUG, "removing conn %p(%s) from active", c, conn_get_type_string(c));
@@ -200,7 +202,7 @@ event_add_conn(struct event_base *evb, struct conn *c)
     ASSERT(c != NULL);
     ASSERT(c->sd > 0);
 
-    event.events = (uint32_t)(EPOLLIN | EPOLLOUT | EPOLLET);
+    event.events = (uint32_t)(EPOLLIN | EPOLLOUT);// | EPOLLET);
     event.data.ptr = c;
 
     log_debug(LOG_DEBUG, "adding conn %p(%s) to active", c, conn_get_type_string(c));

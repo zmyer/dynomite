@@ -705,6 +705,7 @@ msg_parsed(struct context *ctx, struct conn *conn, struct msg *msg)
 
     if (msg->pos == mbuf->last) {
        /* no more data to parse */
+        conn->msg_counter++;
        conn_recv_done(ctx, conn, msg, NULL);
        return DN_OK;
      }
@@ -733,6 +734,7 @@ msg_parsed(struct context *ctx, struct conn *conn, struct msg *msg)
     nmsg->mlen = mbuf_length(nbuf);
     msg->mlen -= nmsg->mlen;
 
+        conn->msg_counter++;
     conn_recv_done(ctx, conn, msg, nmsg);
 
     return DN_OK;
@@ -1009,7 +1011,7 @@ msg_recv_chain(struct context *ctx, struct conn *conn, struct msg *msg)
         msg->dmsg->plen -= n;
     }
 
-    for (;;) {
+    for (;conn->msg_counter < MAX_MESSAGES_PER_ROUND;) {
         status = msg_parse(ctx, conn, msg);
         if (status != DN_OK) {
             return status;
@@ -1036,6 +1038,7 @@ msg_recv(struct context *ctx, struct conn *conn)
 
     ASSERT(conn->recv_active);
     conn->recv_ready = 1;
+    conn->msg_counter = 0;
 
     do {
         msg = conn_recv_next(ctx, conn, true);
@@ -1048,7 +1051,7 @@ msg_recv(struct context *ctx, struct conn *conn)
             return status;
         }
 
-    } while (conn->recv_ready);
+    } while (conn->recv_ready && conn->msg_counter < MAX_MESSAGES_PER_ROUND);
 
     return DN_OK;
 }
@@ -1184,7 +1187,7 @@ msg_send(struct context *ctx, struct conn *conn)
     struct msg *msg;
 
     ASSERT(conn->send_active);
-
+    conn->msg_counter = 0;
     conn->send_ready = 1;
     do {
         msg = conn_send_next(ctx, conn);
@@ -1204,7 +1207,7 @@ msg_send(struct context *ctx, struct conn *conn)
             loga("Setting ENOTRECOVERABLE happens here!");
         }
 
-    } while (conn->send_ready);
+    } while (conn->send_ready && conn->msg_counter < MAX_MESSAGES_PER_ROUND);
 
     return DN_OK;
 }

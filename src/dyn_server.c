@@ -1059,6 +1059,8 @@ rsp_recv_next(struct context *ctx, struct conn *conn, bool alloc)
         return NULL;
     }
 
+    if (conn->msg_counter > MAX_MESSAGES_PER_ROUND)
+        return NULL;
     msg = rsp_get(conn);
     if (msg != NULL) {
         conn->rmsg = msg;
@@ -1220,6 +1222,9 @@ req_send_next(struct context *ctx, struct conn *conn)
         return NULL;
     }
 
+    conn->msg_counter++;
+    if (conn->msg_counter >= MAX_MESSAGES_PER_ROUND)
+        return NULL;
     msg = conn->smsg;
     if (msg != NULL) {
         ASSERT(msg->request && !msg->done);
@@ -1355,7 +1360,7 @@ server_msg_recv(struct context *ctx, struct conn *conn)
     return s;
 }
 struct conn_ops server_ops = {
-    server_msg_recv,
+    msg_recv,
     rsp_recv_next,
     rsp_recv_done,
     msg_send,

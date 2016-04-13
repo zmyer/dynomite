@@ -377,7 +377,8 @@ req_recv_next(struct context *ctx, struct conn *conn, bool alloc)
     if (!alloc) {
         return NULL;
     }
-
+    if (conn->msg_counter > MAX_MESSAGES_PER_ROUND)
+        return NULL;
     msg = req_get(conn);
     if (msg != NULL) {
         conn->rmsg = msg;

@@ -132,6 +132,7 @@ struct conn {
     int				   data_store;
     unsigned           same_dc:1;            /* bit to indicate whether a peer conn is same DC */
     uint32_t           avail_tokens;          /* used to throttle the traffics */
+    uint32_t           msg_counter;             /* ts in sec used to determine the last sent time */
     uint32_t           last_sent;             /* ts in sec used to determine the last sent time */
     uint32_t           last_received;         /* last ts to receive a byte */
     uint32_t           attempted_reconnect;   /* #attempted reconnect before calling close */
@@ -172,14 +173,67 @@ conn_handle_response(struct conn *conn, msgid_t msgid, struct msg *rsp)
     return conn->ops->rsp_handler(conn, msgid, rsp);
 }
 
-#define conn_recv(ctx, conn)                        \
+static inline rstatus_t
+conn_recv(struct context *ctx, struct conn *conn)
+{
+    //log_notice("%s %d Before receiving: inqueue:%u outqueue:%u",
+               //conn_get_type_string(conn), conn->sd, conn->imsg_count, conn->omsg_count);
+    uint32_t prev_out = conn->omsg_count;
+    uint32_t prev_in = conn->imsg_count;
+    rstatus_t s = conn->ops->recv(ctx, conn);
+    if (conn->omsg_count != prev_out) {
+        uint32_t diff = prev_out > conn->omsg_count ? prev_out - conn->omsg_count:
+                                                 conn->omsg_count -  prev_out;
+        if (diff > MAX_MESSAGES_PER_ROUND)
+            log_notice("%s %d After receiving: inqueue:%u outqueue:%u, read %u %s",
+                   conn_get_type_string(conn), conn->sd, conn->imsg_count, conn->omsg_count,
+                   diff, prev_out > conn->omsg_count ? "responses" : "requests");
+    }
+    if (conn->imsg_count != prev_in) {
+        log_notice("%s %d After receiving: inqueue:%u outqueue:%u, read %u responses",
+                   conn_get_type_string(conn), conn->sd, conn->imsg_count, conn->omsg_count,
+                   prev_in > conn->imsg_count ? prev_in - conn->imsg_count:
+                                                conn->imsg_count - prev_in);
+    }
+    return s;
+}
+//#define conn_recv(ctx, conn)                        \
         (conn)->ops->recv(ctx, conn)
+
 #define conn_recv_next(ctx, conn, alloc)            \
         (conn)->ops->recv_next(ctx, conn, alloc)
 #define conn_recv_done(ctx, conn, msg, nmsg)        \
         (conn)->ops->recv_done(ctx, conn, msg, nmsg)
 
-#define conn_send(ctx, conn)                        \
+static inline rstatus_t
+conn_send(struct context *ctx, struct conn *conn)
+{
+    //log_notice("%s %d Before sending: inqueue:%u outqueue:%u",
+               //conn_get_type_string(conn), conn->sd, conn->imsg_count, conn->omsg_count);
+    uint32_t prev_out = conn->omsg_count;
+    uint32_t prev_in = conn->imsg_count;
+    rstatus_t s = conn->ops->send(ctx, conn);
+    if (conn->omsg_count != prev_out) {
+        uint32_t diff = prev_out > conn->omsg_count ? prev_out - conn->omsg_count:
+                                                 conn->omsg_count -  prev_out;
+        if (diff > MAX_MESSAGES_PER_ROUND)
+            log_notice("%s %d After sending: inqueue:%u outqueue:%u, sent %u responses",
+                   conn_get_type_string(conn), conn->sd, conn->imsg_count, conn->omsg_count,
+                   prev_out > conn->omsg_count ? prev_out - conn->omsg_count:
+                                                 conn->omsg_count - prev_out);
+    }
+    if (conn->imsg_count != prev_in) {
+        uint32_t diff = prev_in > conn->imsg_count ? prev_in - conn->imsg_count:
+                                                 conn->imsg_count -  prev_in;
+        if (diff > MAX_MESSAGES_PER_ROUND)
+            log_notice("%s %d After sending: inqueue:%u outqueue:%u, sent %u requestst",
+                   conn_get_type_string(conn), conn->sd, conn->imsg_count, conn->omsg_count,
+                   prev_in > conn->imsg_count ? prev_in - conn->imsg_count:
+                                                conn->imsg_count - prev_in);
+    }
+    return s;
+}
+//#define conn_send(ctx, conn)                        \
         (conn)->ops->send(ctx, conn)
 #define conn_send_next(ctx, conn)                   \
         (conn)->ops->send_next(ctx, conn)

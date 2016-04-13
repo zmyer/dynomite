@@ -23,6 +23,7 @@
 #ifndef _DYN_CORE_H_
 #define _DYN_CORE_H_
 
+#define MAX_MESSAGES_PER_ROUND 1024
 #ifdef HAVE_CONFIG_H
 # include <config.h>
 #endif

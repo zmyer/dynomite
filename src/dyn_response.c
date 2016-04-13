@@ -116,6 +116,9 @@ rsp_send_next(struct context *ctx, struct conn *conn)
 
         return NULL;
     }
+    conn->msg_counter++;
+    if (conn->msg_counter >= MAX_MESSAGES_PER_ROUND)
+        return NULL;
 
     rsp = conn->smsg;
     if (rsp != NULL) {
