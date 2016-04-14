@@ -97,6 +97,7 @@ static struct conn_tqh free_connq; /* free conn q */
 
 consistency_t g_read_consistency = DEFAULT_READ_CONSISTENCY;
 consistency_t g_write_consistency = DEFAULT_WRITE_CONSISTENCY;
+uint64_t g_MAX_MESSAGES_PER_ROUND = 102400ULL;
 
 /*
  * Return the context associated with this connection.

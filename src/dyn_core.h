@@ -23,7 +23,7 @@
 #ifndef _DYN_CORE_H_
 #define _DYN_CORE_H_
 
-#define MAX_MESSAGES_PER_ROUND 1024
+//#define MAX_MESSAGES_PER_ROUND 10240ULL
 #ifdef HAVE_CONFIG_H
 # include <config.h>
 #endif
@@ -131,6 +131,7 @@ struct dyn_ring;
 #include "dyn_stats.h"
 #include "dyn_mbuf.h"
 #include "dyn_message.h"
+extern uint64_t g_MAX_MESSAGES_PER_ROUND;
 #include "dyn_connection.h"
 #include "dyn_cbuf.h"
 #include "dyn_ring_queue.h"

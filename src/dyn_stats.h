@@ -154,6 +154,7 @@ typedef enum {
     CMD_GET_CONSISTENCY,
     CMD_GET_TIMEOUT_FACTOR,
     CMD_SET_TIMEOUT_FACTOR,
+    CMD_SET_ROUND_ROBIN,
 } stats_cmd_t;
 
 struct stats_metric {

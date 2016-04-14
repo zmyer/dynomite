@@ -1059,7 +1059,7 @@ rsp_recv_next(struct context *ctx, struct conn *conn, bool alloc)
         return NULL;
     }
 
-    if (conn->msg_counter > MAX_MESSAGES_PER_ROUND)
+    if (conn->msg_counter > g_MAX_MESSAGES_PER_ROUND)
         return NULL;
     msg = rsp_get(conn);
     if (msg != NULL) {
@@ -1223,7 +1223,7 @@ req_send_next(struct context *ctx, struct conn *conn)
     }
 
     conn->msg_counter++;
-    if (conn->msg_counter >= MAX_MESSAGES_PER_ROUND)
+    if (conn->msg_counter >= g_MAX_MESSAGES_PER_ROUND)
         return NULL;
     msg = conn->smsg;
     if (msg != NULL) {

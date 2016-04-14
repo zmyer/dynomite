@@ -377,7 +377,7 @@ req_recv_next(struct context *ctx, struct conn *conn, bool alloc)
     if (!alloc) {
         return NULL;
     }
-    if (conn->msg_counter > MAX_MESSAGES_PER_ROUND)
+    if (conn->msg_counter > g_MAX_MESSAGES_PER_ROUND)
         return NULL;
     msg = req_get(conn);
     if (msg != NULL) {
@@ -801,6 +801,8 @@ req_forward_remote_dc(struct context *ctx, struct conn *c_conn, struct msg *msg,
 
     msg_clone(msg, orig_mbuf, rack_msg);
     rack_msg->swallow = true;
+    log_info("msg (%d:%d) clone to remote rack msg (%d:%d)",
+              msg->id, msg->parent_id, rack_msg->id, rack_msg->parent_id);
 
     if (log_loggable(LOG_DEBUG)) {
         log_debug(LOG_DEBUG, "forwarding request to conn '%s' on rack '%.*s'",

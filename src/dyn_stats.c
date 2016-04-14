@@ -1078,6 +1078,18 @@ parse_request(int sd, struct stats_cmd *st_cmd)
                         string_copy_c(&st_cmd->req_data, val);
                     }
                     return;
+                } else if (strncmp(reqline[1], "/set_rr", 7) == 0) {
+                    st_cmd->cmd = CMD_SET_ROUND_ROBIN;
+                    char* val = reqline[1] + 7; 
+                    if (*val != '/') {
+                        st_cmd->cmd = CMD_UNKNOWN;
+                        return;
+                    } else {
+                        val++;
+                        string_init(&st_cmd->req_data);
+                        string_copy_c(&st_cmd->req_data, val);
+                    }
+                    return;
                 } else if (strncmp(reqline[1], "/peer", 5) == 0) {
                     log_debug(LOG_VERB, "Setting peer - URL Parameters : %s", reqline[1]);
                     char* peer_state = reqline[1] + 5;
@@ -1247,6 +1259,13 @@ stats_send_rsp(struct stats *st)
             timeout_factor = 10;
         g_timeout_factor = timeout_factor;
         log_warn("setting timeout_factor to %d", g_timeout_factor);
+        return stats_http_rsp(sd, ok.data, ok.len);
+    } else if (cmd == CMD_SET_ROUND_ROBIN) {
+        uint64_t rr = 0;
+        log_warn("st_cmd.req_data '%.*s' ", st_cmd.req_data);
+        sscanf(st_cmd.req_data.data, "%llu", &rr);
+        log_warn("round robin limit = %llu", rr);
+        g_MAX_MESSAGES_PER_ROUND = rr;
         return stats_http_rsp(sd, ok.data, ok.len);
     } else if (cmd == CMD_PEER_DOWN || cmd == CMD_PEER_UP || cmd == CMD_PEER_RESET) {
         log_debug(LOG_VERB, "st_cmd.req_data '%.*s' ", st_cmd.req_data);

@@ -1011,7 +1011,7 @@ msg_recv_chain(struct context *ctx, struct conn *conn, struct msg *msg)
         msg->dmsg->plen -= n;
     }
 
-    for (;conn->msg_counter < MAX_MESSAGES_PER_ROUND;) {
+    for (;conn->msg_counter < g_MAX_MESSAGES_PER_ROUND;) {
         status = msg_parse(ctx, conn, msg);
         if (status != DN_OK) {
             return status;
@@ -1051,7 +1051,7 @@ msg_recv(struct context *ctx, struct conn *conn)
             return status;
         }
 
-    } while (conn->recv_ready && conn->msg_counter < MAX_MESSAGES_PER_ROUND);
+    } while (conn->recv_ready && conn->msg_counter < g_MAX_MESSAGES_PER_ROUND);
 
     return DN_OK;
 }
@@ -1207,7 +1207,7 @@ msg_send(struct context *ctx, struct conn *conn)
             loga("Setting ENOTRECOVERABLE happens here!");
         }
 
-    } while (conn->send_ready && conn->msg_counter < MAX_MESSAGES_PER_ROUND);
+    } while (conn->send_ready && conn->msg_counter < g_MAX_MESSAGES_PER_ROUND);
 
     return DN_OK;
 }
