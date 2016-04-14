@@ -38,7 +38,7 @@
 #define _DYN_CONNECTION_H_
 #include "dyn_core.h"
 
-#define MAX_CONN_QUEUE_SIZE           20000
+#define MAX_CONN_QUEUE_SIZE           40000
 #define MAX_CONN_ALLOWABLE_NON_RECV   5
 #define MAX_CONN_ALLOWABLE_NON_SEND   5
 
