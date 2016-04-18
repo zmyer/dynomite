@@ -173,6 +173,15 @@ conn_handle_response(struct conn *conn, msgid_t msgid, struct msg *rsp)
     return conn->ops->rsp_handler(conn, msgid, rsp);
 }
 
+static inline uint64_t
+conn_get_multiplier(struct conn *conn)
+{
+    switch(conn->type) {
+        case CONN_DNODE_PEER_CLIENT:
+        case CONN_DNODE_PEER_SERVER: return 10;
+        default: return 1;
+    }
+ }
 static inline rstatus_t
 conn_recv(struct context *ctx, struct conn *conn)
 {
@@ -184,7 +193,9 @@ conn_recv(struct context *ctx, struct conn *conn)
     if (conn->omsg_count != prev_out) {
         uint32_t diff = prev_out > conn->omsg_count ? prev_out - conn->omsg_count:
                                                  conn->omsg_count -  prev_out;
-        if (diff > g_MAX_MESSAGES_PER_ROUND)
+        uint64_t multiplier = conn_get_multiplier(conn);
+        if (diff > multiplier * g_MAX_MESSAGES_PER_ROUND)
+        //if (diff > g_MAX_MESSAGES_PER_ROUND)
             log_notice("%s %d After receiving: inqueue:%u outqueue:%u, read %u %s",
                    conn_get_type_string(conn), conn->sd, conn->imsg_count, conn->omsg_count,
                    diff, prev_out > conn->omsg_count ? "responses" : "requests");
@@ -210,7 +221,9 @@ conn_send(struct context *ctx, struct conn *conn)
     if (conn->omsg_count != prev_out) {
         uint32_t diff = prev_out > conn->omsg_count ? prev_out - conn->omsg_count:
                                                  conn->omsg_count -  prev_out;
-        if (diff > g_MAX_MESSAGES_PER_ROUND)
+        uint64_t multiplier = conn_get_multiplier(conn);
+        if (diff > multiplier * g_MAX_MESSAGES_PER_ROUND)
+        //if (diff > g_MAX_MESSAGES_PER_ROUND)
             log_notice("%s %d After sending: inqueue:%u outqueue:%u, sent %u responses",
                    conn_get_type_string(conn), conn->sd, conn->imsg_count, conn->omsg_count,
                    prev_out > conn->omsg_count ? prev_out - conn->omsg_count:
@@ -219,7 +232,9 @@ conn_send(struct context *ctx, struct conn *conn)
     else if (conn->imsg_count != prev_in) {
         uint32_t diff = prev_in > conn->imsg_count ? prev_in - conn->imsg_count:
                                                  conn->imsg_count -  prev_in;
-        if (diff > g_MAX_MESSAGES_PER_ROUND)
+        uint64_t multiplier = conn_get_multiplier(conn);
+        if (diff > multiplier * g_MAX_MESSAGES_PER_ROUND)
+        //if (diff > g_MAX_MESSAGES_PER_ROUND)
             log_notice("%s %d After sending: inqueue:%u outqueue:%u, sent %u requests",
                    conn_get_type_string(conn), conn->sd, conn->imsg_count, conn->omsg_count,
                    prev_in > conn->imsg_count ? prev_in - conn->imsg_count:
