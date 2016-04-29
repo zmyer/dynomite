@@ -106,12 +106,13 @@ client_ref(struct conn *conn, void *owner)
 }
 
 static void
-client_unref_internal_try_put(struct conn *conn)
+client_unref_internal_try_put_locked(struct conn *conn)
 {
     ASSERT(conn->waiting_to_unref);
     unsigned long msgs = dictSize(conn->outstanding_msgs_dict);
     if (msgs != 0) {
         log_warn("conn %p Waiting for %lu outstanding messages", conn, msgs);
+        pthread_spin_unlock(&conn->dict_lock);
         return;
     }
     struct server_pool *pool;
@@ -122,7 +123,15 @@ client_unref_internal_try_put(struct conn *conn)
     conn->waiting_to_unref = 0;
     log_warn("unref conn %p owner %p from pool '%.*s'", conn,
              pool, pool->name.len, pool->name.data);
+    pthread_spin_unlock(&conn->dict_lock);
     conn_put(conn);
+}
+
+static void
+client_unref_internal_try_put(struct conn *conn)
+{
+    pthread_spin_lock(&conn->dict_lock);
+    client_unref_internal_try_put_locked(conn);
 }
 
 static void
@@ -280,7 +289,10 @@ client_handle_response(struct conn *conn, msgid_t reqid, struct msg *rsp)
     // now the handler owns the response. the caller owns the request
     ASSERT(conn->type == CONN_CLIENT);
     // Fetch the original request
+    // MT: protect with spinlock
+    pthread_spin_lock(&conn->dict_lock);
     struct msg *req = dictFetchValue(conn->outstanding_msgs_dict, &reqid);
+    pthread_spin_unlock(&conn->dict_lock);
     if (!req) {
         log_notice("looks like we already cleanedup the request for %d", reqid);
         rsp_put(rsp);
@@ -293,10 +305,12 @@ client_handle_response(struct conn *conn, msgid_t reqid, struct msg *rsp)
         if (req->awaiting_rsps)
             return DN_OK;
         // all responses received
-        dictDelete(conn->outstanding_msgs_dict, &reqid);
         log_info("Putting req %d", req->id);
         req_put(req);
-        client_unref_internal_try_put(conn);
+        // MT: protect with spinlock
+        pthread_spin_lock(&conn->dict_lock);
+        dictDelete(conn->outstanding_msgs_dict, &reqid);
+        client_unref_internal_try_put_locked(conn);
         return DN_OK;
     }
     if (status == DN_NOOPS) {
@@ -305,7 +319,9 @@ client_handle_response(struct conn *conn, msgid_t reqid, struct msg *rsp)
             // if we have sent the response for this request or the connection
             // is closed and we are just waiting to drain off the messages.
             if (req->rsp_sent) {
+                pthread_spin_lock(&conn->dict_lock);
                 dictDelete(conn->outstanding_msgs_dict, &reqid);
+                pthread_spin_unlock(&conn->dict_lock);
                 log_info("Putting req %d", req->id);
                 req_put(req);
             }
@@ -350,7 +366,10 @@ req_recv_next(struct context *ctx, struct conn *conn, bool alloc)
             log_error("eof c %d discarding incomplete req %"PRIu64" len "
                       "%"PRIu32"", conn->sd, msg->id, msg->mlen);
 
-            req_put(msg);
+            if (conn->type == CONN_CLIENT)
+                req_put(msg);
+            else
+                peer_req_put(msg);
         }
 
         /*
@@ -846,7 +865,10 @@ req_forward(struct context *ctx, struct conn *c_conn, struct msg *msg)
 
     // add the message to the dict
     log_debug(LOG_DEBUG, "conn %p adding message %d:%d", c_conn, msg->id, msg->parent_id);
+    // MT: spinlock?
+    pthread_spin_lock(&c_conn->dict_lock);
     dictAdd(c_conn->outstanding_msgs_dict, &msg->id, msg);
+    pthread_spin_unlock(&c_conn->dict_lock);
 
     if (!string_empty(&pool->hash_tag)) {
         struct string *tag = &pool->hash_tag;
@@ -983,10 +1005,10 @@ msg_quorum_rsp_handler(struct msg *req, struct msg *rsp)
     rspmgr_free_other_responses(&req->rspmgr, rsp);
     req->peer = NULL;
     rsp->peer = req;
-    req->selected_rsp = rsp;
     req->err = rsp->err;
     req->error = rsp->error;
     req->dyn_error = rsp->dyn_error;
+    req->selected_rsp = rsp;
     return DN_OK;
 }
 

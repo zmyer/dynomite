@@ -130,8 +130,7 @@
  *      still expecting. For DC_ONE consistency this is immaterial. For DC_QUORUM,
  *      this is the total number of responses expected. We wait for them to arrive
  *      before we free the request. A client connection in turn waits for all the
- *      requests to finish before freeing itself. (Look for waiting_to_unref).
- * selected_rsp : A request->selected_rsp is the response selected for a given
+ *      requests to finish before freeing itself. (Look for waiting_to_unref).  * selected_rsp : A request->selected_rsp is the response selected for a given
  *      request. All code related to sending response should look at selected_rsp.
  * rsp_sent : Due to consistency DC_QUORUM, we would have sent the response for
  *      a request even before all the responses arrive. The responses coming after
@@ -144,9 +143,11 @@
  */
 static uint64_t msg_id;          /* message id counter */
 static uint64_t frag_id;         /* fragment id counter */
+static pthread_spinlock_t msg_lock;
 static size_t nfree_msgq;        /* # free msg q */
 static struct msg_tqh free_msgq; /* free msg q */
 static struct rbtree tmo_rbt;    /* timeout rbtree */
+static struct rbtree peer_tmo_rbt;    /* timeout rbtree */
 static struct rbnode tmo_rbs;    /* timeout rbtree sentinel */
 static size_t alloc_msgs_max;	 /* maximum number of allowed allocated messages */
 uint8_t g_timeout_factor = 1;
@@ -175,6 +176,19 @@ msg_tmo_min(void)
     struct rbnode *node;
 
     node = rbtree_min(&tmo_rbt);
+    if (node == NULL) {
+        return NULL;
+    }
+
+    return msg_from_rbe(node);
+}
+
+struct msg *
+msg_peer_tmo_min(void)
+{
+    struct rbnode *node;
+
+    node = rbtree_min(&peer_tmo_rbt);
     if (node == NULL) {
         return NULL;
     }
@@ -211,6 +225,34 @@ msg_tmo_insert(struct msg *msg, struct conn *conn)
 }
 
 void
+msg_peer_tmo_insert(struct msg *msg, struct conn *conn)
+{
+    struct rbnode *node;
+    msec_t timeout;
+
+    //ASSERT(msg->request);
+    ASSERT(!msg->quit && msg->expect_datastore_reply);
+
+    timeout = conn->dyn_mode? dnode_peer_timeout(msg, conn) : server_timeout(conn);
+    if (timeout <= 0) {
+        return;
+    }
+    timeout = timeout * g_timeout_factor;
+
+    node = &msg->tmo_rbe;
+    node->timeout = timeout;
+    node->key = dn_msec_now() + timeout;
+    node->data = conn;
+
+    rbtree_insert(&peer_tmo_rbt, node);
+
+    if (log_loggable(LOG_VERB)) {
+       log_debug(LOG_VERB, "insert msg %"PRIu64" into tmo rbt with expiry of "
+              "%d msec", msg->id, timeout);
+    }
+}
+
+void
 msg_tmo_delete(struct msg *msg)
 {
     struct rbnode *node;
@@ -230,6 +272,26 @@ msg_tmo_delete(struct msg *msg)
     }
 }
 
+void
+msg_peer_tmo_delete(struct msg *msg)
+{
+    struct rbnode *node;
+
+    node = &msg->tmo_rbe;
+
+    /* already deleted */
+
+    if (node->data == NULL) {
+        return;
+    }
+
+    rbtree_delete(&peer_tmo_rbt, node);
+
+    if (log_loggable(LOG_VERB)) {
+       log_debug(LOG_VERB, "delete msg %"PRIu64" from tmo rbt", msg->id);
+    }
+}
+
 
 static size_t alloc_msg_count = 0;
 
@@ -239,11 +301,13 @@ _msg_get(struct conn *conn, const char *const caller)
     struct msg *msg;
 
     if (!TAILQ_EMPTY(&free_msgq)) {
+        pthread_spin_lock(&msg_lock);
         ASSERT(nfree_msgq);
 
         msg = TAILQ_FIRST(&free_msgq);
         nfree_msgq--;
         TAILQ_REMOVE(&free_msgq, msg, m_tqe);
+        pthread_spin_unlock(&msg_lock);
         goto done;
     }
 
@@ -254,16 +318,18 @@ _msg_get(struct conn *conn, const char *const caller)
          return NULL;
     }
 
+    pthread_spin_lock(&msg_lock);
     alloc_msg_count++;
+    pthread_spin_unlock(&msg_lock);
 
-
-    log_warn("alloc_msg_count: %lu caller: %s conn: %s sd: %d",
-             alloc_msg_count, caller, conn_get_type_string(conn), conn->sd);
 
     msg = dn_alloc(sizeof(*msg));
     if (msg == NULL) {
         return NULL;
     }
+    log_warn("alloc_msg_count: %lu msg:%p caller: %s conn: %s sd: %d",
+             alloc_msg_count, msg, caller, conn_get_type_string(conn), conn->sd);
+
 
 done:
     /* c_tqe, s_tqe, and m_tqe are left uninitialized */
@@ -573,8 +639,10 @@ msg_put(struct msg *msg)
         mbuf_put(mbuf);
     }
 
+    pthread_spin_lock(&msg_lock);
     nfree_msgq++;
     TAILQ_INSERT_HEAD(&free_msgq, msg, m_tqe);
+    pthread_spin_unlock(&msg_lock);
 }
 
 
@@ -635,12 +703,15 @@ void
 msg_init(struct instance *nci)
 {
     log_debug(LOG_DEBUG, "msg size %d", sizeof(struct msg));
+    pthread_spin_init(&msg_lock, PTHREAD_PROCESS_PRIVATE);
     msg_id = 0;
     frag_id = 0;
     nfree_msgq = 0;
     alloc_msgs_max = nci->alloc_msgs_max;
     TAILQ_INIT(&free_msgq);
     rbtree_init(&tmo_rbt, &tmo_rbs);
+    // MT: seperate rbtree for peer connections
+    rbtree_init(&peer_tmo_rbt, &tmo_rbs);
 }
 
 void
@@ -655,6 +726,7 @@ msg_deinit(void)
         msg_free(msg);
     }
     ASSERT(nfree_msgq == 0);
+    pthread_spin_destroy(&msg_lock);
 }
 
 bool
@@ -947,7 +1019,7 @@ msg_recv_chain(struct context *ctx, struct conn *conn, struct msg *msg)
 
     n = conn_recv_data(conn, mbuf->last, msize);
 
-    if (n < 0) {
+    if (n <= 0) {
         if (n == DN_EAGAIN) {
             return DN_OK;
         }

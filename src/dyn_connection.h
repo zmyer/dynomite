@@ -111,6 +111,8 @@ struct conn {
     struct conn_ops    *ops;
     size_t             recv_bytes;    /* received (read) bytes */
     size_t             send_bytes;    /* sent (written) bytes */
+    pthread_spinlock_t in_lock;
+    pthread_spinlock_t dict_lock; // MT: THIS COULD REUSE in_lock
 
     uint32_t           events;        /* connection io events */
     err_t              err;           /* connection errno */

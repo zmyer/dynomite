@@ -64,7 +64,38 @@ req_put(struct msg *msg)
         }
     }
 
+    // MT: which tree to delete from.
     msg_tmo_delete(msg);
+
+    msg_put(msg);
+}
+
+void
+peer_req_put(struct msg *msg)
+{
+    struct msg *pmsg; /* peer message (response) */
+
+    ASSERT(msg->request);
+
+    pmsg = msg->peer;
+    if (pmsg != NULL) {
+        ASSERT(!pmsg->request && pmsg->peer == msg);
+        msg->peer = NULL;
+        pmsg->peer = NULL;
+        rsp_put(pmsg);
+    }
+    if (pmsg != msg->selected_rsp) {
+        pmsg = msg->selected_rsp;
+        if (pmsg != NULL) {
+            ASSERT(!pmsg->request && pmsg->peer == msg);
+            msg->selected_rsp = NULL;
+            pmsg->peer = NULL;
+            rsp_put(pmsg);
+        }
+    }
+
+    // MT: which tree to delete from.
+    msg_peer_tmo_delete(msg);
 
     msg_put(msg);
 }

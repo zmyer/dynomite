@@ -340,8 +340,11 @@ msg_handle_response(struct msg *req, struct msg *rsp)
 size_t msg_free_queue_size(void);
 
 struct msg *msg_tmo_min(void);
+struct msg *msg_peer_tmo_min(void);
 void msg_tmo_insert(struct msg *msg, struct conn *conn);
+void msg_peer_tmo_insert(struct msg *msg, struct conn *conn);
 void msg_tmo_delete(struct msg *msg);
+void msg_peer_tmo_delete(struct msg *msg);
 
 void msg_init(struct instance *nci);
 rstatus_t msg_clone(struct msg *src, struct mbuf *mbuf_start, struct msg *target);
@@ -366,6 +369,7 @@ rstatus_t msg_prepend_format(struct msg *msg, const char *fmt, ...);
 
 struct msg *req_get(struct conn *conn);
 void req_put(struct msg *msg);
+void peer_req_put(struct msg *msg);
 bool req_done(struct conn *conn, struct msg *msg);
 bool req_error(struct conn *conn, struct msg *msg);
 struct msg *req_recv_next(struct context *ctx, struct conn *conn, bool alloc);

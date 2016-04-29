@@ -340,7 +340,6 @@ proxy_accept(struct context *ctx, struct conn *p)
                      p->sd, strerror(errno));
         }
     }
-
     status = event_add_conn(ctx->evb, c);
     if (status < 0) {
         log_error("event add conn from %s %d failed: %s",conn_get_type_string(p),

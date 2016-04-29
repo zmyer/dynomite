@@ -75,7 +75,10 @@ rsp_make_error(struct context *ctx, struct conn *conn, struct msg *msg)
                 err = cmsg->err;
             }
 
-            req_put(cmsg);
+            if (conn->type == CONN_CLIENT)
+                req_put(cmsg);
+            else
+                peer_req_put(cmsg);
         }
     } else {
         err = msg->err;
@@ -109,7 +112,8 @@ rsp_send_next(struct context *ctx, struct conn *conn)
             log_debug(LOG_INFO, "c %d is done", conn->sd);
         }
 
-        status = event_del_out(ctx->evb, conn);
+        status = conn->type == CONN_CLIENT ? event_del_out(ctx->evb, conn) :
+                                             event_del_out(ctx->pevb, conn);
         if (status != DN_OK) {
             conn->err = errno;
         }
@@ -185,7 +189,10 @@ rsp_send_done(struct context *ctx, struct conn *conn, struct msg *rsp)
     // Remove it from the dict
     if (!req->awaiting_rsps) {
         log_debug(LOG_VERB, "conn %p removing message %d:%d", conn, req->id, req->parent_id);
+        // MT: protect with spin lock?
+        pthread_spin_lock(&conn->dict_lock);
         dictDelete(conn->outstanding_msgs_dict, &req->id);
+        pthread_spin_unlock(&conn->dict_lock);
         req_put(req);
     } else {
         log_info("req %d:%d still awaiting rsps %d", req->id, req->parent_id,

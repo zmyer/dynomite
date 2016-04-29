@@ -23,6 +23,7 @@
 #ifndef _DYN_CORE_H_
 #define _DYN_CORE_H_
 
+//#define MAX_MESSAGES_PER_ROUND 10240ULL
 #ifdef HAVE_CONFIG_H
 # include <config.h>
 #endif
@@ -130,6 +131,7 @@ struct dyn_ring;
 #include "dyn_stats.h"
 #include "dyn_mbuf.h"
 #include "dyn_message.h"
+extern uint64_t g_MAX_MESSAGES_PER_ROUND;
 #include "dyn_connection.h"
 #include "dyn_cbuf.h"
 #include "dyn_ring_queue.h"
@@ -171,8 +173,11 @@ struct context {
 
     struct array       pool;        /* server_pool[] */
     struct event_base  *evb;        /* event base */
+    struct event_base  *pevb;        /* event base */
+    pthread_t          peer_tid;            /* stats aggregator thread */
     int                max_timeout; /* max timeout in msec */
     int                timeout;     /* timeout in msec */
+    int                peer_timeout;     /* timeout in msec */
     dyn_state_t        dyn_state;   /* state of the node.  Don't need volatile as
                                        it is ok to eventually get its new value */
     unsigned           enable_gossip:1;   /* enable/disable gossip */
@@ -235,7 +240,7 @@ struct server {
     uint32_t           ns_conn_q;     /* # server connection */
     struct conn_tqh    s_conn_q;      /* server connection q */
 
-    msec_t             next_retry;    /* next retry time in msec */
+    int64_t            next_retry;    /* next retry time in usec */
     uint32_t           failure_count; /* # consecutive failures */
 
     struct string      rack;          /* logical rack */
@@ -261,7 +266,7 @@ struct server_pool {
     struct array       server;               /* server[] */
     struct array       datacenters;                /* racks info  */
     uint32_t           nlive_server;         /* # live server */
-    uint64_t           next_rebuild;         /* next distribution rebuild time in usec */
+    int64_t            next_rebuild;         /* next distribution rebuild time in usec */
 
     struct string      name;                 /* pool name (ref in conf_pool) */
     struct string      addrstr;              /* pool address (ref in conf_pool) */
@@ -273,11 +278,11 @@ struct server_pool {
     int                key_hash_type;        /* key hash type (hash_type_t) */
     hash_t             key_hash;             /* key hasher */
     struct string      hash_tag;             /* key hash tag (ref in conf_pool) */
-    msec_t             timeout;              /* timeout in msec */
+    int                timeout;              /* timeout in msec */
     int                backlog;              /* listen backlog */
     uint32_t           client_connections;   /* maximum # client connection */
     uint32_t           server_connections;   /* maximum # server connection */
-    msec_t             server_retry_timeout_ms; /* server retry timeout in msec */
+    int64_t            server_retry_timeout_ms; /* server retry timeout in usec */
     uint32_t           server_failure_limit; /* server failure limit */
     unsigned           auto_eject_hosts:1;   /* auto_eject_hosts? */
     unsigned           preconnect:1;         /* preconnect? */
@@ -314,7 +319,9 @@ struct server_pool {
 struct context *core_start(struct instance *nci);
 void core_stop(struct context *ctx);
 rstatus_t core_core(void *arg, uint32_t events);
+rstatus_t peer_core_core(void *arg, uint32_t events);
 rstatus_t core_loop(struct context *ctx);
+rstatus_t peer_core_loop(struct context *ctx);
 void core_debug(struct context *ctx);
 
 #endif

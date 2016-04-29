@@ -345,7 +345,7 @@ server_ack_err(struct context *ctx, struct conn *conn, struct msg *req)
         log_info("close %s %d swallow req %"PRIu64" len %"PRIu32
                  " type %d", conn_get_type_string(conn), conn->sd, req->id,
                  req->mlen, req->type);
-        req_put(req);
+        conn->type == CONN_SERVER ? req_put(req) : peer_req_put(req);
         return;
     }
     struct conn *c_conn = req->owner;
@@ -381,7 +381,7 @@ server_ack_err(struct context *ctx, struct conn *conn, struct msg *req)
                                  rsp);
     IGNORE_RET_VAL(status);
     if (req->swallow)
-        req_put(req);
+        c_conn->type == CONN_CLIENT ? req_put(req) : peer_req_put(req);
 }
 
 static void
@@ -1208,15 +1208,18 @@ req_send_next(struct context *ctx, struct conn *conn)
            dnode_peer_connected(ctx, conn);
         }
     }
-
+    // MT: use spin lock
+    pthread_spin_lock(&conn->in_lock);
     nmsg = TAILQ_FIRST(&conn->imsg_q);
     if (nmsg == NULL) {
         /* nothing to send as the server inq is empty */
-        status = event_del_out(ctx->evb, conn);
+        status = conn->type == CONN_SERVER ? event_del_out(ctx->evb, conn) :
+                                             event_del_out(ctx->pevb, conn);
         if (status != DN_OK) {
             conn->err = errno;
         }
 
+        pthread_spin_unlock(&conn->in_lock);
         return NULL;
     }
 
@@ -1225,6 +1228,7 @@ req_send_next(struct context *ctx, struct conn *conn)
         ASSERT(msg->request && !msg->done);
         nmsg = TAILQ_NEXT(msg, s_tqe);
     }
+    pthread_spin_unlock(&conn->in_lock);
 
     conn->smsg = nmsg;
 
@@ -1255,7 +1259,7 @@ req_send_done(struct context *ctx, struct conn *conn, struct msg *msg)
        log_debug(LOG_VVERB, "send done req %"PRIu64" len %"PRIu32" type %d on "
                 "s %d", msg->id, msg->mlen, msg->type, conn->sd);
     }
-
+    // use spinlock only for CONN_DNODE_PEER_SERVER
     /* dequeue the message (request) from server inq */
     conn_dequeue_inq(ctx, conn, msg);
 
@@ -1266,8 +1270,9 @@ req_send_done(struct context *ctx, struct conn *conn, struct msg *msg)
      */
     if (msg->expect_datastore_reply || (conn->type == CONN_SERVER))
         conn_enqueue_outq(ctx, conn, msg);
-    else
-        req_put(msg);
+    else {
+        conn->type == CONN_SERVER ? req_put(msg) : peer_req_put(msg);
+    }
 }
 
 static void
@@ -1287,11 +1292,12 @@ req_server_enqueue_imsgq(struct context *ctx, struct conn *conn, struct msg *msg
     if (msg->expect_datastore_reply) {
         msg_tmo_insert(msg, conn);
     }
-
+    // MT: use spin locks
+    pthread_spin_lock(&conn->in_lock);
     TAILQ_INSERT_TAIL(&conn->imsg_q, msg, s_tqe);
-    log_debug(LOG_VERB, "conn %p enqueue inq %d:%d", conn, msg->id, msg->parent_id);
-
     conn->imsg_count++;
+    pthread_spin_unlock(&conn->in_lock);
+    log_debug(LOG_VERB, "conn %p enqueue inq %d:%d", conn, msg->id, msg->parent_id);
     histo_add(&ctx->stats->server_in_queue, conn->imsg_count);
     stats_server_incr(ctx, conn->owner, in_queue);
     stats_server_incr_by(ctx, conn->owner, in_queue_bytes, msg->mlen);
@@ -1303,10 +1309,12 @@ req_server_dequeue_imsgq(struct context *ctx, struct conn *conn, struct msg *msg
     ASSERT(msg->request);
     ASSERT(conn->type == CONN_SERVER);
 
+    pthread_spin_lock(&conn->in_lock);
     TAILQ_REMOVE(&conn->imsg_q, msg, s_tqe);
-    log_debug(LOG_VERB, "conn %p dequeue inq %d:%d", conn, msg->id, msg->parent_id);
-
     conn->imsg_count--;
+    pthread_spin_unlock(&conn->in_lock);
+
+    log_debug(LOG_VERB, "conn %p dequeue inq %d:%d", conn, msg->id, msg->parent_id);
     histo_add(&ctx->stats->server_in_queue, conn->imsg_count);
     stats_server_decr(ctx, conn->owner, in_queue);
     stats_server_decr_by(ctx, conn->owner, in_queue_bytes, msg->mlen);

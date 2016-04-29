@@ -28,12 +28,12 @@ dnode_req_forward_error(struct context *ctx, struct conn *conn, struct msg *msg)
     msg->err = errno;
 
     if (!msg->expect_datastore_reply || msg->swallow) {
-        req_put(msg);
+        peer_req_put(msg);
         return;
     }
 
     if (req_done(conn, TAILQ_FIRST(&conn->omsg_q))) {
-        status = event_add_out(ctx->evb, conn);
+        status = event_add_out(ctx->pevb, conn);
         if (status != DN_OK) {
             conn->err = errno;
         }
@@ -77,18 +77,10 @@ dnode_peer_req_forward(struct context *ctx, struct conn *c_conn,
     ASSERT((c_conn->type == CONN_CLIENT) ||
            (c_conn->type == CONN_DNODE_PEER_CLIENT));
 
-    /* enqueue the message (request) into peer inq */
-    status = event_add_out(ctx->evb, p_conn);
-    if (status != DN_OK) {
-        dnode_req_forward_error(ctx, p_conn, msg);
-        p_conn->err = errno;
-        return;
-    }
-
     struct mbuf *header_buf = mbuf_get();
     if (header_buf == NULL) {
         loga("Unable to obtain an mbuf for dnode msg's header!");
-        req_put(msg);
+        peer_req_put(msg);
         return;
     }
 
@@ -107,7 +99,7 @@ dnode_peer_req_forward(struct context *ctx, struct conn *c_conn,
             if (status == DN_ERROR) {
                 loga("OOM to obtain an mbuf for encryption!");
                 mbuf_put(header_buf);
-                req_put(msg);
+                peer_req_put(msg);
                 return;
             }
 
@@ -136,6 +128,14 @@ dnode_peer_req_forward(struct context *ctx, struct conn *c_conn,
     }
 
     conn_enqueue_inq(ctx, p_conn, msg);
+    /* enqueue the message (request) into peer inq */
+    status = event_add_out(ctx->pevb, p_conn);
+    if (status != DN_OK) {
+        dnode_req_forward_error(ctx, p_conn, msg);
+        p_conn->err = errno;
+        return;
+    }
+
 
     dnode_peer_req_forward_stats(ctx, p_conn->owner, msg);
 

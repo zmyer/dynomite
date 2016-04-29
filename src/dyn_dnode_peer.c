@@ -417,8 +417,8 @@ dnode_peer_connect(struct context *ctx, struct server *server, struct conn *conn
                     strerror(errno));
         }
     }
-
-    status = event_add_conn(ctx->evb, conn);
+    // MT: ctx->pevb
+    status = event_add_conn(ctx->pevb, conn);
     if (status != DN_OK) {
         log_error("dyn: event add conn s %d for peer '%.*s' failed: %s",
                 conn->sd, server->pname.len, server->pname.data,
@@ -470,7 +470,7 @@ dnode_peer_ack_err(struct context *ctx, struct conn *conn, struct msg *req)
         log_info("close %s %d swallow req %u:%u len %"PRIu32
                  " type %d", conn_get_type_string(conn), conn->sd, req->id,
                  req->parent_id, req->mlen, req->type);
-        req_put(req);
+        peer_req_put(req);
         return;
     }
     struct conn *c_conn = req->owner;
@@ -501,7 +501,7 @@ dnode_peer_ack_err(struct context *ctx, struct conn *conn, struct msg *req)
                                  rsp);
     IGNORE_RET_VAL(status);
     if (req->swallow)
-        req_put(req);
+        peer_req_put(req);
 }
 
 
@@ -621,7 +621,7 @@ dnode_peer_close(struct context *ctx, struct conn *conn)
         conn_dequeue_inq(ctx, conn, msg);
         // We should also remove the msg from the timeout rbtree.
         // for outq, its already taken care of
-        msg_tmo_delete(msg);
+        msg_peer_tmo_delete(msg);
         dnode_peer_ack_err(ctx, conn, msg);
         in_counter++;
 
@@ -1430,7 +1430,7 @@ dnode_rsp_swallow(struct context *ctx, struct conn *peer_conn,
                   peer_conn->sd);
         rsp_put(rsp);
     }
-    req_put(req);
+    peer_req_put(req);
 }
 
 /* Description: link data from a peer connection to a client-facing connection
@@ -1508,7 +1508,7 @@ dnode_rsp_forward_match(struct context *ctx, struct conn *peer_conn, struct msg 
     IGNORE_RET_VAL(status);
     if (req->swallow) {
         log_info("swallow request %d:%d", req->id, req->parent_id);
-        req_put(req);
+        peer_req_put(req);
     }
 }
 
@@ -1618,7 +1618,7 @@ dnode_rsp_forward(struct context *ctx, struct conn *peer_conn, struct msg *rsp)
         IGNORE_RET_VAL(status);
         if (req->swallow) {
                 log_debug(LOG_INFO, "swallow request %d:%d", req->id, req->parent_id);
-            req_put(req);
+            peer_req_put(req);
         }
     }
 }
@@ -1750,7 +1750,7 @@ dnode_req_send_next(struct context *ctx, struct conn *conn)
         }
 
         //requeue
-        status = event_add_out(ctx->evb, conn);
+        status = event_add_out(ctx->pevb, conn);
         IGNORE_RET_VAL(status);
 
         return NULL;
@@ -1781,16 +1781,19 @@ dnode_req_peer_enqueue_imsgq(struct context *ctx, struct conn *conn, struct msg 
 {
     ASSERT(msg->request);
     ASSERT(conn->type == CONN_DNODE_PEER_SERVER);
-
     log_debug(LOG_VERB, "conn %p enqueue inq %d:%d calling req_server_enqueue_imsgq",
               conn, msg->id, msg->parent_id);
+    // MT: use a seperate timeout tree for peers
     if (msg->expect_datastore_reply) {
-        msg_tmo_insert(msg, conn);
+        msg_peer_tmo_insert(msg, conn);
     }
+    // MT: use spin locks
+    pthread_spin_lock(&conn->in_lock);
     TAILQ_INSERT_TAIL(&conn->imsg_q, msg, s_tqe);
-    log_debug(LOG_VERB, "conn %p enqueue inq %d:%d", conn, msg->id, msg->parent_id);
-
     conn->imsg_count++;
+    pthread_spin_unlock(&conn->in_lock);
+
+    log_debug(LOG_VERB, "conn %p enqueue inq %d:%d", conn, msg->id, msg->parent_id);
     struct server_pool *pool = (struct server_pool *) array_get(&ctx->pool, 0);
     if (conn->same_dc) {
         histo_add(&ctx->stats->peer_in_queue, conn->imsg_count);
@@ -1809,11 +1812,14 @@ dnode_req_peer_dequeue_imsgq(struct context *ctx, struct conn *conn, struct msg 
 {
     ASSERT(msg->request);
     ASSERT(conn->type == CONN_DNODE_PEER_SERVER);
-
+    // MT: use spin locks
+    pthread_spin_lock(&conn->in_lock);
     TAILQ_REMOVE(&conn->imsg_q, msg, s_tqe);
-    log_debug(LOG_VERB, "conn %p dequeue inq %d:%d", conn, msg->id, msg->parent_id);
-
     conn->imsg_count--;
+    pthread_spin_unlock(&conn->in_lock);
+
+    log_debug(LOG_VERB, "conn %p dequeue inq %d:%d", conn, msg->id, msg->parent_id);
+    // MT: release spin lock
     struct server_pool *pool = (struct server_pool *) array_get(&ctx->pool, 0);
     if (conn->same_dc) {
         histo_add(&ctx->stats->peer_in_queue, conn->imsg_count);
@@ -1855,7 +1861,7 @@ dnode_req_peer_dequeue_omsgq(struct context *ctx, struct conn *conn, struct msg 
     ASSERT(msg->request);
     ASSERT(conn->type == CONN_DNODE_PEER_SERVER);
 
-    msg_tmo_delete(msg);
+    msg_peer_tmo_delete(msg);
 
     TAILQ_REMOVE(&conn->omsg_q, msg, s_tqe);
     log_debug(LOG_VVERB, "conn %p dequeue outq %p", conn, msg);

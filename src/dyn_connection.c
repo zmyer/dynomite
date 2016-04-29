@@ -92,7 +92,9 @@
  * TODOs: Minh: add explanation for peer-to-peer communication
  */
 
+static pthread_spinlock_t conn_lock;
 static uint32_t nfree_connq;       /* # free conn q */
+// MT: protect this queue
 static struct conn_tqh free_connq; /* free conn q */
 
 consistency_t g_read_consistency = DEFAULT_READ_CONSISTENCY;
@@ -142,17 +144,21 @@ _conn_get(void)
     struct conn *conn;
 
     if (!TAILQ_EMPTY(&free_connq)) {
+        pthread_spin_lock(&conn_lock);
         ASSERT(nfree_connq > 0);
 
         conn = TAILQ_FIRST(&free_connq);
         nfree_connq--;
         TAILQ_REMOVE(&free_connq, conn, conn_tqe);
+        pthread_spin_unlock(&conn_lock);
     } else {
         conn = dn_alloc(sizeof(*conn));
         if (conn == NULL) {
             return NULL;
         }
         memset(conn, 0, sizeof(*conn));
+        pthread_spin_init(&conn->in_lock, PTHREAD_PROCESS_PRIVATE);
+        pthread_spin_init(&conn->dict_lock, PTHREAD_PROCESS_PRIVATE);
     }
 
     conn->owner = NULL;
@@ -374,14 +380,17 @@ conn_put(struct conn *conn)
 
     log_debug(LOG_VVERB, "put conn %p", conn);
 
+    pthread_spin_lock(&conn_lock);
     nfree_connq++;
     TAILQ_INSERT_HEAD(&free_connq, conn, conn_tqe);
+    pthread_spin_unlock(&conn_lock);
 }
 
 void
 conn_init(void)
 {
     log_debug(LOG_DEBUG, "conn size %d", sizeof(struct conn));
+    pthread_spin_init(&conn_lock, PTHREAD_PROCESS_PRIVATE);
     nfree_connq = 0;
     TAILQ_INIT(&free_connq);
 }
@@ -398,6 +407,7 @@ conn_deinit(void)
         conn_free(conn);
     }
     ASSERT(nfree_connq == 0);
+    pthread_spin_destroy(&conn_lock);
 }
 
 ssize_t

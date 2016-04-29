@@ -25,6 +25,7 @@
 
 #include "dyn_core.h"
 
+static pthread_spinlock_t mbuf_lock;
 static uint64_t nfree_mbufq;   /* # free mbuf */
 static struct mhdr free_mbufq; /* free mbuf q */
 
@@ -47,6 +48,7 @@ _mbuf_get(void)
     //loga("_mbuf_get, nfree_mbufq = %d", nfree_mbufq);
 
     if (!STAILQ_EMPTY(&free_mbufq)) {
+        pthread_spin_lock(&mbuf_lock);
         ASSERT(nfree_mbufq > 0);
 
         mbuf = STAILQ_FIRST(&free_mbufq);
@@ -54,6 +56,7 @@ _mbuf_get(void)
         STAILQ_REMOVE_HEAD(&free_mbufq, next);
 
         ASSERT(mbuf->magic == MBUF_MAGIC);
+        pthread_spin_unlock(&mbuf_lock);
         goto done;
     }
 
@@ -61,7 +64,9 @@ _mbuf_get(void)
     if (buf == NULL) {
         return NULL;
     }
+    pthread_spin_lock(&mbuf_lock);
     mbuf_alloc_count++;
+    pthread_spin_unlock(&mbuf_lock);
 
     /*
      * mbuf header is at the tail end of the mbuf. This enables us to catch
@@ -161,11 +166,13 @@ mbuf_put(struct mbuf *mbuf)
 {
     log_debug(LOG_VVERB, "put mbuf %p len %d", mbuf, mbuf->last - mbuf->pos);
 
+    pthread_spin_lock(&mbuf_lock);
     ASSERT(STAILQ_NEXT(mbuf, next) == NULL);
     ASSERT(mbuf->magic == MBUF_MAGIC);
 
     nfree_mbufq++;
     STAILQ_INSERT_HEAD(&free_mbufq, mbuf, next);
+    pthread_spin_unlock(&mbuf_lock);
 }
 
 /*
@@ -321,6 +328,7 @@ void
 mbuf_init(struct instance *nci)
 {
     nfree_mbufq = 0;
+    pthread_spin_init(&mbuf_lock, PTHREAD_PROCESS_PRIVATE);
     STAILQ_INIT(&free_mbufq);
 
     mbuf_chunk_size = nci->mbuf_chunk_size + MBUF_ESIZE;
@@ -340,6 +348,7 @@ mbuf_deinit(void)
         nfree_mbufq--;
     }
     ASSERT(nfree_mbufq == 0);
+    pthread_spin_destroy(&mbuf_lock);
 }
 
 

@@ -576,6 +576,20 @@ dn_post_run(struct instance *nci)
 }
 
 static void
+dn_peer_run(void *arg)
+{
+    struct instance *nci = (struct instance *)arg;
+    struct context *ctx = nci->ctx;
+    for (;;) {
+        rstatus_t status = peer_core_loop(ctx);
+        if (status != DN_OK) {
+            log_error("peer core loop thread failed. *****************");
+            break;
+        }
+    }
+
+}
+static void
 dn_run(struct instance *nci)
 {
     rstatus_t status;
@@ -591,7 +605,15 @@ dn_run(struct instance *nci)
 
     if (!ctx->enable_gossip)
     	ctx->dyn_state = NORMAL;
+    // MT: start the peer thread
+    status = pthread_create(&ctx->peer_tid, NULL, dn_peer_run, nci);
+    if (status < 0) {
+        log_error("Failed to start the peer thread");
+		return;
+    }
 
+
+    // MT: Peer thread listens on DNODE_PROXY, DNODE_PEER_CLIENT/SERVER
     /* run rabbit run */
     for (;;) {
         status = core_loop(ctx);

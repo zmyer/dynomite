@@ -137,7 +137,7 @@ dnode_client_close(struct context *ctx, struct conn *conn)
                   msg->type);
         }
 
-        req_put(msg);
+        peer_req_put(msg);
     }
 
     ASSERT(conn->smsg == NULL);
@@ -156,7 +156,7 @@ dnode_client_close(struct context *ctx, struct conn *conn)
                       msg->error ? "error": "completed", msg->id, msg->mlen,
                       msg->type);
             }
-            req_put(msg);
+            peer_req_put(msg);
         } else {
             msg->swallow = 1;
 
@@ -195,7 +195,8 @@ dnode_client_handle_response(struct conn *conn, msgid_t msgid, struct msg *rsp)
     struct msg *req = rsp->peer;
     req->peer = NULL;
     req->selected_rsp = rsp;
-    status = event_add_out(ctx->evb, conn);
+    // MT: This should be ctx->pevb
+    status = event_add_out(ctx->pevb, conn);
     if (status != DN_OK) {
         conn->err = errno;
     }
@@ -213,14 +214,14 @@ dnode_req_filter(struct context *ctx, struct conn *conn, struct msg *msg)
            log_debug(LOG_VERB, "dyn: filter empty req %"PRIu64" from c %d", msg->id,
                        conn->sd);
         }
-        req_put(msg);
+        peer_req_put(msg);
         return true;
     }
 
     /* dynomite handler */
     if (msg->dmsg != NULL) {
         if (dmsg_process(ctx, conn, msg->dmsg)) {
-            req_put(msg);
+            peer_req_put(msg);
             return true;
         }
 
@@ -402,7 +403,7 @@ dnode_rsp_send_next(struct context *ctx, struct conn *conn)
               if (status == DN_ERROR) {
                     loga("OOM to obtain an mbuf for encryption!");
                     mbuf_put(header_buf);
-                    req_put(rsp);
+                    peer_req_put(rsp);
                     return NULL;
               }
 
@@ -462,7 +463,7 @@ dnode_rsp_send_done(struct context *ctx, struct conn *conn, struct msg *rsp)
     /* dequeue request from client outq */
     conn_dequeue_outq(ctx, conn, req);
 
-    req_put(req);
+    peer_req_put(req);
 }
 
 struct conn_ops dnode_client_ops = {

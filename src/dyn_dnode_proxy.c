@@ -152,8 +152,9 @@ dnode_listen(struct context *ctx, struct conn *p)
         return DN_ERROR;
     }
 
-    log_debug(LOG_INFO, "dyn: e %d with nevent %d", event_fd(ctx->evb), ctx->evb->nevent);
-    status = event_add_conn(ctx->evb, p);
+    log_debug(LOG_INFO, "dyn: e %d with nevent %d", event_fd(ctx->pevb), ctx->pevb->nevent);
+    // MT: use ctx->pevb
+    status = event_add_conn(ctx->pevb, p);
     if (status < 0) {
         log_error("dyn: event add conn p %d on addr '%.*s' failed: %s",
                   p->sd, pool->d_addrstr.len, pool->d_addrstr.data,
@@ -161,7 +162,7 @@ dnode_listen(struct context *ctx, struct conn *p)
         return DN_ERROR;
     }
 
-    status = event_del_out(ctx->evb, p);
+    status = event_del_out(ctx->pevb, p);
     if (status < 0) {
         log_error("dyn: event del out p %d on addr '%.*s' failed: %s",
                   strerror(errno));
@@ -334,7 +335,8 @@ dnode_accept(struct context *ctx, struct conn *p)
         }
     }
 
-    status = event_add_conn(ctx->evb, c);
+    // MT: should be pevb
+    status = event_add_conn(ctx->pevb, c);
     if (status < 0) {
         log_error("dyn: event add conn from %s %d failed: %s",
                   conn_get_type_string(p), p->sd, strerror(errno));

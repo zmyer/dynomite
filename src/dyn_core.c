@@ -42,7 +42,7 @@ core_ctx_create(struct instance *nci)
 
 	srand((unsigned) time(NULL));
 
-	ctx = dn_alloc(sizeof(*ctx));
+	ctx = dn_zalloc(sizeof(*ctx));
 	if (ctx == NULL) {
 		return NULL;
 	}
@@ -50,9 +50,11 @@ core_ctx_create(struct instance *nci)
 	ctx->cf = NULL;
 	ctx->stats = NULL;
 	ctx->evb = NULL;
+	ctx->pevb = NULL;
 	array_null(&ctx->pool);
 	ctx->max_timeout = nci->stats_interval;
 	ctx->timeout = ctx->max_timeout;
+	ctx->peer_timeout = ctx->max_timeout;
 	ctx->dyn_state = INIT;
 
 	/* parse and create configuration */
@@ -105,6 +107,19 @@ core_ctx_create(struct instance *nci)
 		dn_free(ctx);
 		return NULL;
 	}
+    // MT: create ctx->pevb  which is peer eventbase
+    /* initialize event handling for peer_client, peer_proxy and peer_server */
+	ctx->pevb = event_base_create(EVENT_SIZE, &peer_core_core);
+	if (ctx->pevb == NULL) {
+		loga("Failed to create socket event handling!!!");
+		crypto_deinit();
+		event_base_destroy(ctx->evb);
+		stats_destroy(ctx->stats);
+		server_pool_deinit(&ctx->pool);
+		conf_destroy(ctx->cf);
+		dn_free(ctx);
+		return NULL;
+	}
 
 	/* preconnect? servers in server pool */
 	status = server_pool_preconnect(ctx);
@@ -113,6 +128,7 @@ core_ctx_create(struct instance *nci)
 		crypto_deinit();
 		server_pool_disconnect(ctx);
 		event_base_destroy(ctx->evb);
+		event_base_destroy(ctx->pevb);
 		stats_destroy(ctx->stats);
 		server_pool_deinit(&ctx->pool);
 		conf_destroy(ctx->cf);
@@ -127,6 +143,7 @@ core_ctx_create(struct instance *nci)
 		crypto_deinit();
 		server_pool_disconnect(ctx);
 		event_base_destroy(ctx->evb);
+		event_base_destroy(ctx->pevb);
 		stats_destroy(ctx->stats);
 		server_pool_deinit(&ctx->pool);
 		conf_destroy(ctx->cf);
@@ -140,6 +157,7 @@ core_ctx_create(struct instance *nci)
 		loga("Failed to initialize dnode!!!");
 		crypto_deinit();
 		server_pool_disconnect(ctx);
+		event_base_destroy(ctx->pevb);
 		event_base_destroy(ctx->evb);
 		stats_destroy(ctx->stats);
 		server_pool_deinit(&ctx->pool);
@@ -157,6 +175,7 @@ core_ctx_create(struct instance *nci)
 		crypto_deinit();
 		dnode_deinit(ctx);
 		server_pool_disconnect(ctx);
+		event_base_destroy(ctx->pevb);
 		event_base_destroy(ctx->evb);
 		stats_destroy(ctx->stats);
 		server_pool_deinit(&ctx->pool);
@@ -175,6 +194,7 @@ core_ctx_create(struct instance *nci)
 		dnode_peer_deinit(&ctx->pool);
 		dnode_deinit(ctx);
 		server_pool_disconnect(ctx);
+		event_base_destroy(ctx->pevb);
 		event_base_destroy(ctx->evb);
 		stats_destroy(ctx->stats);
 		server_pool_deinit(&ctx->pool);
@@ -198,6 +218,7 @@ core_ctx_create(struct instance *nci)
         dnode_peer_deinit(&ctx->pool);
         dnode_deinit(ctx);
         server_pool_disconnect(ctx);
+		event_base_destroy(ctx->pevb);
         event_base_destroy(ctx->evb);
         stats_destroy(ctx->stats);
         server_pool_deinit(&ctx->pool);
@@ -306,6 +327,25 @@ core_close_log(struct conn *conn)
 }
 
 static void
+peer_core_close(struct context *ctx, struct conn *conn)
+{
+	rstatus_t status;
+
+	ASSERT(conn->sd > 0);
+
+    core_close_log(conn);
+
+    // MT: This should be either ctx->evb or ctx->pevb
+	status = event_del_conn(ctx->pevb, conn);
+	if (status < 0) {
+		log_warn("event del conn %d failed, ignored: %s",
+		          conn->sd, strerror(errno));
+	}
+
+	conn_close(ctx, conn);
+}
+
+static void
 core_close(struct context *ctx, struct conn *conn)
 {
 	rstatus_t status;
@@ -314,6 +354,7 @@ core_close(struct context *ctx, struct conn *conn)
 
     core_close_log(conn);
 
+    // MT: This should be either ctx->evb or ctx->pevb
 	status = event_del_conn(ctx->evb, conn);
 	if (status < 0) {
 		log_warn("event del conn %d failed, ignored: %s",
@@ -321,6 +362,21 @@ core_close(struct context *ctx, struct conn *conn)
 	}
 
 	conn_close(ctx, conn);
+}
+
+static void
+peer_core_error(struct context *ctx, struct conn *conn)
+{
+	rstatus_t status;
+
+	status = dn_get_soerror(conn->sd);
+	if (status < 0) {
+	log_warn("get soerr on %s client %d failed, ignored: %s",
+             conn_get_type_string(conn), conn->sd, strerror(errno));
+	}
+	conn->err = errno;
+
+	peer_core_close(ctx, conn);
 }
 
 static void
@@ -336,6 +392,67 @@ core_error(struct context *ctx, struct conn *conn)
 	conn->err = errno;
 
 	core_close(ctx, conn);
+}
+
+static void
+peer_core_timeout(struct context *ctx)
+{
+	for (;;) {
+		struct msg *msg;
+		struct conn *conn;
+		msec_t now, then;
+
+		msg = msg_peer_tmo_min();
+		if (msg == NULL) {
+			ctx->peer_timeout = ctx->max_timeout;
+			return;
+		}
+
+		/* skip over req that are in-error or done */
+
+		if (msg->error || msg->done) {
+			msg_peer_tmo_delete(msg);
+			continue;
+		}
+
+		/*
+		 * timeout expired req and all the outstanding req on the timing
+		 * out server
+		 */
+
+		conn = msg->tmo_rbe.data;
+		then = msg->tmo_rbe.key;
+
+		now = dn_msec_now();
+		if (now < then) {
+			int delta = (int)(then - now);
+			ctx->peer_timeout = MIN(delta, ctx->max_timeout);
+			return;
+		}
+
+        log_warn("req %"PRIu64" on %s %d timedout, timeout was %d", msg->id,
+                 conn_get_type_string(conn), conn->sd, msg->tmo_rbe.timeout);
+
+		msg_peer_tmo_delete(msg);
+
+		if (conn->dyn_mode) {
+			if (conn->type == CONN_DNODE_PEER_SERVER) { //outgoing peer requests
+		 	   struct server *server = conn->owner;
+                if (conn->same_dc)
+			        stats_pool_incr(ctx, server->owner, peer_timedout_requests);
+                else
+			        stats_pool_incr(ctx, server->owner, remote_peer_timedout_requests);
+			}
+		} else {
+			if (conn->type == CONN_SERVER) { //storage server requests
+			   stats_server_incr(ctx, conn->owner, server_dropped_requests);
+			}
+		}
+
+		conn->err = ETIMEDOUT;
+
+		peer_core_close(ctx, conn);
+	}
 }
 
 static void
@@ -374,8 +491,8 @@ core_timeout(struct context *ctx)
 			return;
 		}
 
-        log_warn("req %"PRIu64" on %s %d timedout, timeout was %d", msg->id,
-                 conn_get_type_string(conn), conn->sd, msg->tmo_rbe.timeout);
+        log_warn("req %"PRIu64"(%p)on %s %d timedout, timeout was %d", msg->id,
+                 msg, conn_get_type_string(conn), conn->sd, msg->tmo_rbe.timeout);
 
 		msg_tmo_delete(msg);
 
@@ -462,6 +579,67 @@ core_core(void *arg, uint32_t events)
 	return DN_OK;
 }
 
+rstatus_t
+peer_core_core(void *arg, uint32_t events)
+{
+	rstatus_t status;
+	struct conn *conn = arg;
+	struct context *ctx = conn_to_ctx(conn);
+
+    log_debug(LOG_VVVERB, "event %04"PRIX32" on %s %d", events,
+              conn_get_type_string(conn), conn->sd);
+
+	conn->events = events;
+
+	/* error takes precedence over read | write */
+	if (events & EVENT_ERR) {
+		if (conn->err && conn->dyn_mode) {
+			loga("conn err on dnode EVENT_ERR: %d", conn->err);
+		}
+		peer_core_error(ctx, conn);
+
+		return DN_ERROR;
+	}
+
+	/* read takes precedence over write */
+	if (events & EVENT_READ) {
+		status = core_recv(ctx, conn);
+
+		if (status != DN_OK || conn->done || conn->err) {
+			if (conn->dyn_mode) {
+				if (conn->err) {
+					loga("conn err on dnode EVENT_READ: %d", conn->err);
+					peer_core_close(ctx, conn);
+					return DN_ERROR;
+				}
+				return DN_OK;
+			}
+
+			peer_core_close(ctx, conn);
+			return DN_ERROR;
+		}
+	}
+
+	if (events & EVENT_WRITE) {
+		status = core_send(ctx, conn);
+		if (status != DN_OK || conn->done || conn->err) {
+			if (conn->dyn_mode) {
+				if (conn->err) {
+					loga("conn err on dnode EVENT_WRITE: %d", conn->err);
+					peer_core_close(ctx, conn);
+					return DN_ERROR;
+				}
+				return DN_OK;
+			}
+
+			peer_core_close(ctx, conn);
+			return DN_ERROR;
+		}
+	}
+
+	return DN_OK;
+}
+
 
 void
 core_debug(struct context *ctx)
@@ -529,6 +707,23 @@ core_process_messages(void)
 
 	return DN_OK;
 }
+
+rstatus_t
+peer_core_loop(struct context *ctx)
+{
+	int nsd;
+
+	nsd = event_wait(ctx->pevb, ctx->peer_timeout);
+	if (nsd < 0) {
+		return nsd;
+	}
+
+	peer_core_timeout(ctx);
+	//stats_swap(ctx->stats);
+
+	return DN_OK;
+}
+
 
 rstatus_t
 core_loop(struct context *ctx)
