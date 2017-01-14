@@ -88,6 +88,7 @@
 int dn_set_blocking(int sd);
 int dn_set_nonblocking(int sd);
 int dn_set_reuseaddr(int sd);
+int dn_set_keepalive(int sd, int val);
 int dn_set_tcpnodelay(int sd);
 int dn_set_linger(int sd, int timeout);
 int dn_set_sndbuf(int sd, int size);
@@ -349,8 +350,6 @@ void dn_stacktrace(int skip_count);
 
 int _scnprintf(char *buf, size_t size, const char *fmt, ...);
 int _vscnprintf(char *buf, size_t size, const char *fmt, va_list args);
-typedef uint64_t msec_t;
-typedef uint64_t usec_t;
 usec_t dn_usec_now(void);
 msec_t dn_msec_now(void);
 

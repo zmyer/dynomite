@@ -28,7 +28,7 @@ AC_PROG_CXX
 AC_PROG_INSTALL
 AC_PROG_LN_S
 AC_PROG_MAKE_SET
-AC_PROG_RANLIB
+LT_INIT
 AC_PROG_LIBTOOL
 
 # Checks for typedefs, structures, and compiler characteristics
@@ -206,6 +206,7 @@ AC_CONFIG_FILES([Makefile
                  src/Makefile
                  src/hashkit/Makefile
                  src/proto/Makefile
+                 src/entropy/Makefile                 
                  src/seedsprovider/Makefile
                  src/event/Makefile
                  src/tools/Makefile])

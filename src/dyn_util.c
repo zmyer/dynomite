@@ -80,6 +80,12 @@ dn_set_reuseaddr(int sd)
     return setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, &reuse, len);
 }
 
+int
+dn_set_keepalive(int sd, int val)
+{
+    return setsockopt(sd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof(val));
+}
+
 /*
  * Disable Nagle algorithm on TCP socket.
  *
@@ -653,3 +659,4 @@ dn_unresolve_desc(int sd)
 
     return dn_unresolve_addr(addr, addrlen);
 }
+

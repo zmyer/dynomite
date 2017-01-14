@@ -25,6 +25,7 @@
 #ifdef DN_HAVE_EPOLL
 
 #include <sys/epoll.h>
+#include <dyn_event.h>
 
 struct event_base *
 event_base_create(int nevent, event_cb_t cb)
@@ -79,7 +80,7 @@ event_base_destroy(struct event_base *evb)
         return;
     }
 
-    ASSERT(evb->ep > 0);
+    ASSERT(evb->ep >= 0);
 
     dn_free(evb->event);
 
@@ -99,7 +100,7 @@ event_add_in(struct event_base *evb, struct conn *c)
     struct epoll_event event;
     int ep = evb->ep;
 
-    ASSERT(ep > 0);
+    ASSERT(ep >= 0);
     ASSERT(c != NULL);
     ASSERT(c->sd > 0);
 
@@ -134,7 +135,7 @@ event_add_out(struct event_base *evb, struct conn *c)
     struct epoll_event event;
     int ep = evb->ep;
 
-    ASSERT(ep > 0);
+    ASSERT(ep >= 0);
     ASSERT(c != NULL);
     ASSERT(c->sd > 0);
     ASSERT(c->recv_active);
@@ -165,7 +166,7 @@ event_del_out(struct event_base *evb, struct conn *c)
     struct epoll_event event;
     int ep = evb->ep;
 
-    ASSERT(ep > 0);
+    ASSERT(ep >= 0);
     ASSERT(c != NULL);
     ASSERT(c->sd > 0);
     ASSERT(c->recv_active);
@@ -196,7 +197,7 @@ event_add_conn(struct event_base *evb, struct conn *c)
     struct epoll_event event;
     int ep = evb->ep;
 
-    ASSERT(ep > 0);
+    ASSERT(ep >= 0);
     ASSERT(c != NULL);
     ASSERT(c->sd > 0);
 
@@ -222,7 +223,7 @@ event_del_conn(struct event_base *evb, struct conn *c)
     int status;
     int ep = evb->ep;
 
-    ASSERT(ep > 0);
+    ASSERT(ep >= 0);
     ASSERT(c != NULL);
     ASSERT(c->sd > 0);
 
@@ -246,7 +247,7 @@ event_wait(struct event_base *evb, int timeout)
     struct epoll_event *event = evb->event;
     int nevent = evb->nevent;
 
-    ASSERT(ep > 0);
+    ASSERT(ep >= 0);
     ASSERT(event != NULL);
     ASSERT(nevent > 0);
 
@@ -340,6 +341,54 @@ event_loop_stats(event_stats_cb_t cb, void *arg)
         }
 
         cb(st, &n);
+    }
+
+error:
+    status = close(ep);
+    if (status < 0) {
+        log_error("close e %d failed, ignored: %s", ep, strerror(errno));
+    }
+    ep = -1;
+}
+
+void
+event_loop_entropy(event_entropy_cb_t cb, void *arg)
+{
+    struct entropy *ent = arg;
+    int status, ep;
+    struct epoll_event ev;
+    ent->interval = 30;
+
+    ep = epoll_create(1);
+    if (ep < 0) {
+        log_error("entropy epoll create failed: %s", strerror(errno));
+        return;
+    }
+
+    ev.data.fd = ent->sd;
+    ev.events = EPOLLIN;
+
+    status = epoll_ctl(ep, EPOLL_CTL_ADD, ent->sd, &ev);
+    if (status < 0) {
+        log_error("entropy epoll ctl on e %d sd %d failed: %s", ep, ent->sd,
+                  strerror(errno));
+        goto error;
+    }
+
+    for (;;) {
+        int n;
+
+        n = epoll_wait(ep, &ev, 1, ent->interval);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            log_error("entropy epoll wait on e %d with m %d failed: %s", ep,
+            		ent->sd, strerror(errno));
+            break;
+        }
+
+        cb(ent, &n);
     }
 
 error:

@@ -50,9 +50,11 @@
     ACTION( dnode_client_out_queue,       STATS_GAUGE,        "# dnode client requests in outgoing queue")                \
     ACTION( dnode_client_out_queue_bytes, STATS_GAUGE,        "current dnode client request bytes in outgoing queue")     \
     /* peer behavior */                                                                                                   \
-    ACTION( peer_dropped_requests,        STATS_COUNTER,      "# local dc peer dropped requests")                                  \
-    ACTION( peer_timedout_requests,       STATS_COUNTER,      "# local dc peer timedout requests")                                 \
-    ACTION( remote_peer_timedout_requests,STATS_COUNTER,      "# remote dc peer timedout requests")                                 \
+    ACTION( peer_dropped_requests,        STATS_COUNTER,      "# local dc peer dropped requests")                         \
+    ACTION( peer_timedout_requests,       STATS_COUNTER,      "# local dc peer timedout requests")                        \
+    ACTION( remote_peer_dropped_requests, STATS_COUNTER,      "# remote dc peer dropped requests")                        \
+    ACTION( remote_peer_timedout_requests,STATS_COUNTER,      "# remote dc peer timedout requests")                       \
+    ACTION( remote_peer_failover_requests,STATS_COUNTER,      "# remote dc peer failover requests")                       \
     ACTION( peer_eof,                     STATS_COUNTER,      "# eof on peer connections")                                \
     ACTION( peer_err,                     STATS_COUNTER,      "# errors on peer connections")                             \
     ACTION( peer_timedout,                STATS_COUNTER,      "# timeouts on local dc peer connections")                           \
@@ -63,6 +65,7 @@
     ACTION( peer_request_bytes,           STATS_COUNTER,      "total peer request bytes")                                 \
     ACTION( peer_responses,               STATS_COUNTER,      "# peer respones")                                          \
     ACTION( peer_response_bytes,          STATS_COUNTER,      "total peer response bytes")                                \
+    ACTION( peer_ejected_at,              STATS_TIMESTAMP,    "timestamp when peer was ejected")                               \
     ACTION( peer_ejects,                  STATS_COUNTER,      "# times a peer was ejected")                               \
     ACTION( peer_in_queue,                STATS_GAUGE,        "# local dc peer requests in incoming queue")                        \
     ACTION( remote_peer_in_queue,         STATS_GAUGE,        "# remote dc peer requests in incoming queue")                        \
@@ -83,7 +86,6 @@
     ACTION( server_eof,                   STATS_COUNTER,           "# eof on server connections")                              \
     ACTION( server_err,                   STATS_COUNTER,           "# errors on server connections")                           \
     ACTION( server_timedout,              STATS_COUNTER,           "# timeouts on server connections")                         \
-    ACTION( server_connections,           STATS_GAUGE,             "# active server connections")                              \
     ACTION( server_ejected_at,            STATS_TIMESTAMP,         "timestamp when server was ejected in usec since epoch")    \
     ACTION( server_dropped_requests,      STATS_COUNTER,           "# server dropped requests")                                \
     ACTION( server_timedout_requests,     STATS_COUNTER,           "# server timedout requests")                               \
@@ -118,9 +120,6 @@
 	ACTION( redis_req_sortedsets,		  STATS_COUNTER,	  "# Redis sortedsets")										  \
 	ACTION( redis_req_other,			  STATS_COUNTER,	  "# Redis other")											  \
 
-#define STATS_ADDR      "0.0.0.0"
-#define STATS_PORT      22222
-#define STATS_INTERVAL  (30 * 1000) /* in msec */
 
 typedef enum stats_type {
     STATS_INVALID,
@@ -154,6 +153,7 @@ typedef enum {
     CMD_GET_CONSISTENCY,
     CMD_GET_TIMEOUT_FACTOR,
     CMD_SET_TIMEOUT_FACTOR,
+    CMD_GET_STATE,
 } stats_cmd_t;
 
 struct stats_metric {
@@ -179,7 +179,7 @@ struct stats_server {
 struct stats_pool {
     struct string name;   /* pool name (ref) */
     struct array  metric; /* stats_metric[] for pool codec */
-    struct array  server; /* stats_server[] */
+    struct stats_server server; /* stats for datastore */
 };
 
 struct stats_buffer {
@@ -188,6 +188,9 @@ struct stats_buffer {
     size_t   size;  /* buffer alloc size */
 };
 
+/** \struct stats
+ * Dynomite server performance statistics.
+ */
 struct stats {
     struct context           *ctx;
     uint16_t                  port;           /* stats monitoring port */
@@ -198,9 +201,9 @@ struct stats {
     struct stats_buffer       buf;            /* info buffer */
     struct stats_buffer       clus_desc_buf;  /* cluster_describe buffer */
 
-    struct array              current;        /* stats_pool[] (a) */
-    struct array              shadow;         /* stats_pool[] (b) */
-    struct array              sum;            /* stats_pool[] (c = a + b) */
+    struct stats_pool         current;        /* stats_pool[] (a) */
+    struct stats_pool         shadow;         /* stats_pool[] (b) */
+    struct stats_pool         sum;            /* stats_pool[] (c = a + b) */
 
     pthread_t                 tid;            /* stats aggregator thread */
     int                       sd;             /* stats descriptor */
@@ -241,6 +244,7 @@ struct stats {
     struct string             free_msgs_str;
     struct string             alloc_mbufs_str;
     struct string             free_mbufs_str;
+    struct string			  dyn_memory_str;
 
     struct string             rack_str;
     struct string             rack;
@@ -251,22 +255,31 @@ struct stats {
     volatile int              aggregate;      /* shadow (b) aggregate? */
     volatile int              updated;        /* current (a) updated? */
     volatile bool             reset_histogram;
-    struct histogram latency_histo;
-    struct histogram payload_size_histo;
-    struct histogram cross_region_histo;
-    struct histogram client_out_queue;
-    struct histogram server_in_queue;
-    struct histogram server_out_queue;
-    struct histogram dnode_client_out_queue;
-    struct histogram peer_in_queue;
-    struct histogram peer_out_queue;
-    struct histogram remote_peer_in_queue;
-    struct histogram remote_peer_out_queue;
+    volatile struct histogram latency_histo;
+    volatile struct histogram payload_size_histo;
+
+    volatile struct histogram server_latency_histo;
+    volatile struct histogram cross_zone_latency_histo;
+    volatile struct histogram cross_region_latency_histo;
+
+    volatile struct histogram server_queue_wait_time_histo;
+    volatile struct histogram cross_zone_queue_wait_time_histo;
+    volatile struct histogram cross_region_queue_wait_time_histo;
+
+    volatile struct histogram client_out_queue;
+    volatile struct histogram server_in_queue;
+    volatile struct histogram server_out_queue;
+    volatile struct histogram dnode_client_out_queue;
+    volatile struct histogram peer_in_queue;
+    volatile struct histogram peer_out_queue;
+    volatile struct histogram remote_peer_in_queue;
+    volatile struct histogram remote_peer_out_queue;
 
     size_t           alloc_msgs;
     size_t           free_msgs;
     uint64_t         alloc_mbufs;
     uint64_t         free_mbufs;
+    uint64_t         dyn_memory;
 
 };
 
@@ -285,8 +298,6 @@ typedef enum stats_server_field {
 } stats_server_field_t;
 #undef DEFINE_ACTION
 
-
-
 struct stats_cmd {
 	stats_cmd_t cmd;
 	struct string req_data;
@@ -295,96 +306,96 @@ struct stats_cmd {
 
 #if defined DN_STATS && DN_STATS == 1
 
-#define stats_pool_incr(_ctx, _pool, _name) do {                        \
-    _stats_pool_incr(_ctx, _pool, STATS_POOL_##_name);                  \
+#define stats_pool_incr(_ctx, _name) do {                        \
+    _stats_pool_incr(_ctx, STATS_POOL_##_name);                  \
 } while (0)
 
-#define stats_pool_decr(_ctx, _pool, _name) do {                        \
-    _stats_pool_decr(_ctx, _pool, STATS_POOL_##_name);                  \
+#define stats_pool_decr(_ctx, _name) do {                        \
+    _stats_pool_decr(_ctx, STATS_POOL_##_name);                  \
 } while (0)
 
-#define stats_pool_incr_by(_ctx, _pool, _name, _val) do {               \
-    _stats_pool_incr_by(_ctx, _pool, STATS_POOL_##_name, _val);         \
+#define stats_pool_incr_by(_ctx, _name, _val) do {               \
+    _stats_pool_incr_by(_ctx, STATS_POOL_##_name, _val);         \
 } while (0)
 
-#define stats_pool_decr_by(_ctx, _pool, _name, _val) do {               \
-    _stats_pool_decr_by(_ctx, _pool, STATS_POOL_##_name, _val);         \
+#define stats_pool_decr_by(_ctx, _name, _val) do {               \
+    _stats_pool_decr_by(_ctx, STATS_POOL_##_name, _val);         \
 } while (0)
 
-#define stats_pool_set_ts(_ctx, _pool, _name, _val) do {                \
-    _stats_pool_set_ts(_ctx, _pool, STATS_POOL_##_name, _val);          \
+#define stats_pool_set_ts(_ctx, _name, _val) do {                \
+    _stats_pool_set_ts(_ctx, STATS_POOL_##_name, _val);          \
 } while (0)
 
-#define stats_pool_get_ts(_ctx, _pool, _name)                           \
-    _stats_pool_get_ts(_ctx, _pool, STATS_POOL_##_name)
+#define stats_pool_get_ts(_ctx, _name)                           \
+    _stats_pool_get_ts(_ctx, STATS_POOL_##_name)
 
-#define stats_pool_set_val(_ctx, _pool, _name, _val) do {                \
-    _stats_pool_set_val(_ctx, _pool, STATS_POOL_##_name, _val);          \
+#define stats_pool_set_val(_ctx, _name, _val) do {                \
+    _stats_pool_set_val(_ctx, STATS_POOL_##_name, _val);          \
 } while (0)
 
-#define stats_pool_get_val(_ctx, _pool, _name)                          \
-    _stats_pool_get_val(_ctx, _pool, STATS_POOL_##_name)
+#define stats_pool_get_val(_ctx, _name)                          \
+    _stats_pool_get_val(_ctx, STATS_POOL_##_name)
 
-#define stats_server_incr(_ctx, _server, _name) do {                    \
-    _stats_server_incr(_ctx, _server, STATS_SERVER_##_name);            \
+#define stats_server_incr(_ctx, _name) do {                    \
+    _stats_server_incr(_ctx, STATS_SERVER_##_name);            \
 } while (0)
 
-#define stats_server_decr(_ctx, _server, _name) do {                    \
-    _stats_server_decr(_ctx, _server, STATS_SERVER_##_name);            \
+#define stats_server_decr(_ctx, _name) do {                    \
+    _stats_server_decr(_ctx, STATS_SERVER_##_name);            \
 } while (0)
 
-#define stats_server_incr_by(_ctx, _server, _name, _val) do {           \
-    _stats_server_incr_by(_ctx, _server, STATS_SERVER_##_name, _val);   \
+#define stats_server_incr_by(_ctx, _name, _val) do {           \
+    _stats_server_incr_by(_ctx, STATS_SERVER_##_name, _val);   \
 } while (0)
 
-#define stats_server_decr_by(_ctx, _server, _name, _val) do {           \
-    _stats_server_decr_by(_ctx, _server, STATS_SERVER_##_name, _val);   \
+#define stats_server_decr_by(_ctx, _name, _val) do {           \
+    _stats_server_decr_by(_ctx, STATS_SERVER_##_name, _val);   \
 } while (0)
 
-#define stats_server_set_ts(_ctx, _server, _name, _val) do {            \
-     _stats_server_set_ts(_ctx, _server, STATS_SERVER_##_name, _val);   \
+#define stats_server_set_ts(_ctx, _name, _val) do {            \
+     _stats_server_set_ts(_ctx, STATS_SERVER_##_name, _val);   \
 } while (0)
 
-#define stats_server_get_ts(_ctx, _server, _name)                       \
-     _stats_server_get_ts(_ctx, _server, STATS_SERVER_##_name)
+#define stats_server_get_ts(_ctx, _name)                       \
+     _stats_server_get_ts(_ctx, STATS_SERVER_##_name)
 
-#define stats_server_set_val(_ctx, _server, _name, _val) do {           \
-     _stats_server_set_val(_ctx, _server, STATS_SERVER_##_name, _val);  \
+#define stats_server_set_val(_ctx, _name, _val) do {           \
+     _stats_server_set_val(_ctx, STATS_SERVER_##_name, _val);  \
 } while (0)
 
-#define stats_server_get_val(_ctx, _server, _name)                      \
-     _stats_server_get_val(_ctx, _server, STATS_SERVER_##_name)
+#define stats_server_get_val(_ctx, _name)                      \
+     _stats_server_get_val(_ctx, STATS_SERVER_##_name)
 
 
 #else
 
-#define stats_pool_incr(_ctx, _pool, _name)
+#define stats_pool_incr(_ctx, _name)
 
-#define stats_pool_decr(_ctx, _pool, _name)
+#define stats_pool_decr(_ctx, _name)
 
-#define stats_pool_incr_by(_ctx, _pool, _name, _val)
+#define stats_pool_incr_by(_ctx, _name, _val)
 
-#define stats_pool_decr_by(_ctx, _pool, _name, _val)
+#define stats_pool_decr_by(_ctx, _name, _val)
 
-#define stats_pool_set_val(_ctx, _pool, _name, _val)
+#define stats_pool_set_val(_ctx, _name, _val)
 
-#define stats_pool_get_val(_ctx, _pool, _name)
+#define stats_pool_get_val(_ctx, _name)
 
-#define stats_server_incr(_ctx, _server, _name)
+#define stats_server_incr(_ctx, _name)
 
-#define stats_server_decr(_ctx, _server, _name)
+#define stats_server_decr(_ctx, _name)
 
-#define stats_server_incr_by(_ctx, _server, _name, _val)
+#define stats_server_incr_by(_ctx, _name, _val)
 
-#define stats_server_decr_by(_ctx, _server, _name, _val)
+#define stats_server_decr_by(_ctx, _name, _val)
 
-#define stats_server_set_ts(_ctx, _server, _name, _val)
+#define stats_server_set_ts(_ctx, _name, _val)
 
-#define stats_server_get_ts(_ctx, _server, _name)
+#define stats_server_get_ts(_ctx, _name)
 
-#define stats_server_set_val(_ctx, _server, _name, _val)
+#define stats_server_set_val(_ctx, _name, _val)
 
-#define stats_server_get_val(_ctx, _server, _name)
+#define stats_server_get_val(_ctx, _name)
 
 #endif
 
@@ -392,27 +403,28 @@ struct stats_cmd {
 
 void stats_describe(void);
 
-void _stats_pool_incr(struct context *ctx, struct server_pool *pool, stats_pool_field_t fidx);
-void _stats_pool_decr(struct context *ctx, struct server_pool *pool, stats_pool_field_t fidx);
-void _stats_pool_incr_by(struct context *ctx, struct server_pool *pool, stats_pool_field_t fidx, int64_t val);
-void _stats_pool_decr_by(struct context *ctx, struct server_pool *pool, stats_pool_field_t fidx, int64_t val);
-void _stats_pool_set_ts(struct context *ctx, struct server_pool *pool, stats_pool_field_t fidx, int64_t val);
-uint64_t _stats_pool_get_ts(struct context *ctx, struct server_pool *pool, stats_pool_field_t fidx);
-void _stats_pool_set_val(struct context *ctx, struct server_pool *pool, stats_pool_field_t fidx, int64_t val);
-int64_t _stats_pool_get_val(struct context *ctx, struct server_pool *pool,
+void _stats_pool_incr(struct context *ctx, stats_pool_field_t fidx);
+void _stats_pool_decr(struct context *ctx, stats_pool_field_t fidx);
+void _stats_pool_incr_by(struct context *ctx, stats_pool_field_t fidx, int64_t val);
+void _stats_pool_decr_by(struct context *ctx, stats_pool_field_t fidx, int64_t val);
+void _stats_pool_set_ts(struct context *ctx, stats_pool_field_t fidx, int64_t val);
+uint64_t _stats_pool_get_ts(struct context *ctx,stats_pool_field_t fidx);
+void _stats_pool_set_val(struct context *ctx,stats_pool_field_t fidx, int64_t val);
+int64_t _stats_pool_get_val(struct context *ctx,
 		                 stats_pool_field_t fidx);
 
-void _stats_server_incr(struct context *ctx, struct server *server, stats_server_field_t fidx);
-void _stats_server_decr(struct context *ctx, struct server *server, stats_server_field_t fidx);
-void _stats_server_incr_by(struct context *ctx, struct server *server, stats_server_field_t fidx, int64_t val);
-void _stats_server_decr_by(struct context *ctx, struct server *server, stats_server_field_t fidx, int64_t val);
-void _stats_server_set_ts(struct context *ctx, struct server *server, stats_server_field_t fidx, uint64_t val);
-uint64_t _stats_server_get_ts(struct context *ctx, struct server *server, stats_server_field_t fidx);
-void _stats_server_set_val(struct context *ctx, struct server *server, stats_server_field_t fidx, int64_t val);
-int64_t _stats_server_get_val(struct context *ctx, struct server *server, stats_server_field_t fidx);
+void _stats_server_incr(struct context *ctx, stats_server_field_t fidx);
+void _stats_server_decr(struct context *ctx, stats_server_field_t fidx);
+void _stats_server_incr_by(struct context *ctx, stats_server_field_t fidx, int64_t val);
+void _stats_server_decr_by(struct context *ctx, stats_server_field_t fidx, int64_t val);
+void _stats_server_set_ts(struct context *ctx, stats_server_field_t fidx, uint64_t val);
+uint64_t _stats_server_get_ts(struct context *ctx, stats_server_field_t fidx);
+void _stats_server_set_val(struct context *ctx, stats_server_field_t fidx, int64_t val);
+int64_t _stats_server_get_val(struct context *ctx, stats_server_field_t fidx);
 
-struct stats *stats_create(uint16_t stats_port, char *stats_ip, int stats_interval, char *source,
-		                   struct array *server_pool, struct context *ctx);
+struct stats * stats_create(uint16_t stats_port, struct string pname, int stats_interval,
+             char *source, struct server_pool *sp, struct context *ctx);
+
 void stats_destroy(struct stats *stats);
 void stats_swap(struct stats *stats);
 

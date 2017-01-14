@@ -91,10 +91,13 @@ typedef enum connection_type {
 } connection_type_t;
 
 struct conn {
+    object_type_t      object_type;
     TAILQ_ENTRY(conn)  conn_tqe;      /* link in server_pool / server / free q */
+    TAILQ_ENTRY(conn)  ready_tqe;     /* link in ready connection q */
     void               *owner;        /* connection owner - server_pool / server */
 
     int                sd;            /* socket descriptor */
+    struct string      pname;
     int                family;        /* socket address family */
     socklen_t          addrlen;       /* socket length */
     struct sockaddr    *addr;         /* socket address (ref in server or server_pool) */
@@ -128,13 +131,10 @@ struct conn {
     unsigned           dnode_secured:1;      /* is a secured connection? */
     unsigned           dnode_crypto_state:1; /* crypto state */
     unsigned char      aes_key[50]; //aes_key[34];              /* a place holder for AES key */
-
-    int				   data_store;
     unsigned           same_dc:1;            /* bit to indicate whether a peer conn is same DC */
     uint32_t           avail_tokens;          /* used to throttle the traffics */
     uint32_t           last_sent;             /* ts in sec used to determine the last sent time */
     uint32_t           attempted_reconnect;   /* #attempted reconnect before calling close */
-    uint32_t           non_bytes_recv;        /* #times or epoll triggers we receive no bytes */
     //uint32_t           non_bytes_send;        /* #times or epoll triggers that we are not able to send any bytes */
     consistency_t      read_consistency;
     consistency_t      write_consistency;
@@ -189,21 +189,38 @@ conn_handle_response(struct conn *conn, msgid_t msgid, struct msg *rsp)
         (conn)->ops->dequeue_outq(ctx, conn, msg)
 TAILQ_HEAD(conn_tqh, conn);
 
+int print_conn(FILE *stream, struct conn *conn);
 void conn_set_write_consistency(struct conn *conn, consistency_t cons);
 consistency_t conn_get_write_consistency(struct conn *conn);
 void conn_set_read_consistency(struct conn *conn, consistency_t cons);
 consistency_t conn_get_read_consistency(struct conn *conn);
 struct context *conn_to_ctx(struct conn *conn);
 struct conn *test_conn_get(void);
-struct conn *conn_get(void *owner, bool client, int data_store);
+struct conn *conn_get(void *owner, bool client);
 struct conn *conn_get_proxy(void *owner);
-struct conn *conn_get_peer(void *owner, bool client, int data_store);
+struct conn *conn_get_peer(void *owner, bool client);
 struct conn *conn_get_dnode(void *owner);
 void conn_put(struct conn *conn);
+rstatus_t conn_listen(struct context *ctx, struct conn *p);
+
+/**
+ * Open an outgoing socket connection to either another Dynomite node or to a
+ * backend data store (such as Redis or ARDB).
+ * @param[in] ctx Dynomite server context.
+ * @param[in,out] conn Outbound socket connection.
+ * @return rstatus_t Return status code.
+ */
+rstatus_t conn_connect(struct context *ctx, struct conn *conn);
+
 ssize_t conn_recv_data(struct conn *conn, void *buf, size_t size);
 ssize_t conn_sendv_data(struct conn *conn, struct array *sendv, size_t nsend);
 void conn_init(void);
 void conn_deinit(void);
 void conn_print(struct conn *conn);
 
+bool conn_is_req_first_in_outqueue(struct conn *conn, struct msg *req);
+rstatus_t conn_event_add_conn(struct conn * conn);
+rstatus_t conn_event_add_out(struct conn * conn);
+rstatus_t conn_event_del_conn(struct conn * conn);
+rstatus_t conn_event_del_out(struct conn * conn);
 #endif

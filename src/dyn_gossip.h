@@ -17,11 +17,11 @@
 #define SEED_BUF_SIZE (1024*1024)     //in bytes
 
 
-typedef uint8_t (*seeds_provider_t)(struct context *, struct string *);
+typedef uint8_t (*seeds_provider_t)(struct context *, struct mbuf *);
 extern struct gossip_node_pool gn_pool;
 
 
-struct node {
+struct gossip_node {
     struct dyn_token   token;            /* token for this node */
     struct string      dc;
     struct string      rack;
@@ -67,7 +67,6 @@ struct gossip_node_pool {
     struct context     *ctx;                 /* owner context */
     seeds_provider_t   seeds_provider;       /* seeds provider */
     struct array       datacenters;          /* gossip datacenters */
-    uint32_t           nlive_server;         /* # live server */
     int64_t            last_run;             /* last time run in usec */
     int                g_interval;           /* gossip interval */
     dict               *dict_dc;
